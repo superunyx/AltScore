@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv*/
+.env
+.pytest_cache/
+*.ckpt
+*.tflite
+*.keras
+*.h5
+*.log
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# React Native / Expo
+.expo/
+android/build/
+ios/build/
+ios/Pods/
+android/.gradle/
+*.iml
+local.properties
+
+# Project specific
+simulation/payload_delta.json
+simulation/federated_learning_progress.png
+data/generated_users/
+scratch.py
+cmdline-tools.zip
+*.db
+shared/saved_model_dir/
+simulation/temp_saved_model/
