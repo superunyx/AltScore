@@ -50,4 +50,4 @@ This project demonstrates that decentralized machine learning can operate on rea
 
 ## License and Contributions
 
-This is an academic/hackathon project and is currently not open for outside contributions. All rights reserved.
+This is an academic project and is currently not open for outside contributions. All rights reserved.
