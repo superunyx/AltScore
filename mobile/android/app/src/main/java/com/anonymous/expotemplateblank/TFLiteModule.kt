@@ -1,17 +1,20 @@
 package com.anonymous.expotemplateblank
 
 import android.util.Log
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.WritableNativeMap
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.flex.FlexDelegate
 import java.io.FileInputStream
 import java.nio.channels.FileChannel
 import java.nio.FloatBuffer
 import kotlin.concurrent.thread
+import kotlin.math.sqrt
 
 class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
@@ -20,12 +23,33 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
     override fun getName(): String {
         return "TFLiteModule"
     }
+    
+    private fun emitLog(message: String) {
+        Log.d(TAG, message)
+        if (reactApplicationContext.hasActiveCatalystInstance()) {
+            reactApplicationContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("TFLiteLog", message)
+        }
+    }
+    
+    private fun emitStatus(status: String) {
+        if (reactApplicationContext.hasActiveCatalystInstance()) {
+            reactApplicationContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit("TFLiteStatus", status)
+        }
+    }
 
     @ReactMethod
     fun runLocalTrainingRound(promise: Promise) {
-        Log.d(TAG, "runLocalTrainingRound called, starting background thread")
+        val startTime = System.currentTimeMillis()
+        emitLog("runLocalTrainingRound called, starting background thread")
+        emitStatus("Idle")
+        
         thread(start = true) {
-            Log.d(TAG, "Background thread started")
+            emitLog("Background thread started")
+            emitStatus("Loading Model")
             var interpreter: Interpreter? = null
             var flexDelegate: FlexDelegate? = null
             try {
@@ -37,7 +61,7 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                     val fileChannel = fileInputStream.channel
                     fileChannel.map(FileChannel.MapMode.READ_ONLY, assetFileDescriptor.startOffset, assetFileDescriptor.declaredLength)
                 }
-                Log.d(TAG, "Model loaded from assets")
+                emitLog("Model loaded from assets")
 
                 // 2. Initialize Interpreter with FlexDelegate for Select TF Ops
                 val options = Interpreter.Options()
@@ -45,7 +69,7 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 options.addDelegate(flexDelegate)
                 options.setNumThreads(1) // Avoid uncontrolled thread spawning
                 interpreter = Interpreter(mappedByteBuffer, options)
-                Log.d(TAG, "Interpreter initialized with 1 thread and FlexDelegate")
+                emitLog("Interpreter initialized with 1 thread and FlexDelegate")
 
                 // 3. Prepare dummy data matching expected shape [1, 30, 3] and [1, 1]
                 val numWindows = 1
@@ -64,9 +88,10 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 
                 // 4. Run the "train" signature in a loop (epochs)
                 val epochs = 5
-                Log.d(TAG, "Starting training loop for $epochs epochs")
+                emitLog("Starting training loop for $epochs epochs")
                 for (epoch in 1..epochs) {
-                    Log.d(TAG, "Running epoch $epoch")
+                    emitStatus("Epoch $epoch of $epochs")
+                    emitLog("Running epoch $epoch")
                     xBuffer.rewind()
                     yBuffer.rewind()
                     lossBuffer.rewind()
@@ -76,11 +101,12 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                     trainOutputs["loss"] = lossBuffer
                     
                     interpreter.runSignature(trainInputs, trainOutputs, "train")
-                    Log.d(TAG, "Epoch $epoch finished")
+                    emitLog("Epoch $epoch finished")
                 }
 
                 // 5. Compute the delta using export_weights
-                Log.d(TAG, "Training finished, exporting weights")
+                emitStatus("Exporting Weights")
+                emitLog("Training finished, exporting weights")
                 val exportInputs = mapOf<String, Any>("dummy" to FloatBuffer.allocate(1))
                 val exportOutputs: MutableMap<String, Any> = HashMap()
                 
@@ -91,24 +117,52 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 }
                 
                 interpreter.runSignature(exportInputs, exportOutputs, "export_weights")
-                Log.d(TAG, "Exported ${outputNames.size} weight tensors successfully")
+                emitLog("Exported ${outputNames.size} weight tensors successfully")
+                
+                var totalBytes = 0
+                var sumOfSquares = 0.0
+                for (name in outputNames) {
+                    val buffer = exportOutputs[name] as FloatBuffer
+                    buffer.rewind()
+                    totalBytes += buffer.capacity() * 4
+                    while (buffer.hasRemaining()) {
+                        val v = buffer.get().toDouble()
+                        sumOfSquares += v * v
+                    }
+                }
+                val l2Norm = sqrt(sumOfSquares)
+                
+                val duration = System.currentTimeMillis() - startTime
+                emitLog("Round complete in ${duration}ms")
+                emitStatus("Done")
                 
                 val result = WritableNativeMap()
                 result.putString("status", "success")
                 result.putString("message", "export_weights signature is wired and FloatBuffers allocated for ${outputNames.size} tensors.")
+                result.putInt("duration", duration.toInt())
+                result.putInt("byteSize", totalBytes)
+                result.putDouble("l2Norm", l2Norm)
                 
-                Log.d(TAG, "Resolving promise")
+                emitLog("Resolving promise")
                 promise.resolve(result)
                 
             } catch (e: Throwable) {
-                Log.e(TAG, "Exception or Error caught in background thread: ${e.message}", e)
+                emitStatus("Error")
+                emitLog("Exception or Error caught in background thread: ${e.message}")
                 promise.reject("TFLITE_ERROR", "Failed to run training: ${e.message}", e)
             } finally {
                 // Ensure native resources are properly freed regardless of exceptions
                 interpreter?.close()
                 flexDelegate?.close()
-                Log.d(TAG, "Native resources freed")
+                emitLog("Native resources freed")
             }
         }
     }
+    
+    // Required for React Native events
+    @ReactMethod
+    fun addListener(eventName: String) {}
+
+    @ReactMethod
+    fun removeListeners(count: Int) {}
 }

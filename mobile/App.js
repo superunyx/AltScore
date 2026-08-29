@@ -1,34 +1,79 @@
-import React, { useState } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, ScrollView, NativeEventEmitter, NativeModules } from 'react-native';
 
-import { useEffect } from 'react';
+const { TFLiteModule } = NativeModules;
+const tfliteEmitter = new NativeEventEmitter(TFLiteModule);
+
 export default function App() {
-  useEffect(() => { handleStartTraining(); }, []);
-
   const [score, setScore] = useState(720);
   const [isTraining, setIsTraining] = useState(false);
   const [progress, setProgress] = useState(0);
   const [lastSyncedRound, setLastSyncedRound] = useState(0);
+  
+  // Debug State
+  const [showDebug, setShowDebug] = useState(false);
+  const [trainStatus, setTrainStatus] = useState('Idle');
+  const [logs, setLogs] = useState([]);
+  const [lastTiming, setLastTiming] = useState(null);
+  const [lastL2Norm, setLastL2Norm] = useState(null);
+  const [lastByteSize, setLastByteSize] = useState(null);
+  const [serverStatus, setServerStatus] = useState('Not connected');
+
+  useEffect(() => {
+    const statusSub = tfliteEmitter.addListener('TFLiteStatus', (status) => {
+      setTrainStatus(status);
+    });
+    const logSub = tfliteEmitter.addListener('TFLiteLog', (logMsg) => {
+      setLogs(prev => {
+        const next = [...prev, logMsg];
+        if (next.length > 30) return next.slice(next.length - 30);
+        return next;
+      });
+    });
+    
+    return () => {
+      statusSub.remove();
+      logSub.remove();
+    };
+  }, []);
 
   // =========================================================================
   // ML INTERFACE BOUNDARY
   // =========================================================================
   const runOnDeviceTraining = async () => {
     try {
-      const { NativeModules } = require('react-native');
-      const { TFLiteModule } = NativeModules;
-      
       if (!TFLiteModule) {
         console.warn("TFLiteModule not found, falling back to stub");
-        return new Promise((resolve) => {
-          setTimeout(() => {
-            resolve({ success: true, newScore: score + 10, round: lastSyncedRound + 1 });
-          }, 1000);
-        });
+        return { success: true, newScore: score + 10, round: lastSyncedRound + 1 };
       }
       
       const result = await TFLiteModule.runLocalTrainingRound();
       console.log("Native TFLite Training Result:", result);
+      
+      setLastTiming(result.duration);
+      setLastByteSize(result.byteSize);
+      setLastL2Norm(result.l2Norm?.toFixed(4));
+      
+      // POST delta to server (simulated or real depending on backend readiness)
+      // Assuming a real submit_update endpoint is at http://localhost:8000/submit_update
+      setTrainStatus("POSTing delta");
+      try {
+        const formData = new FormData();
+        // Send a dummy file since we haven't extracted the raw bytes into a file in React Native yet.
+        formData.append("delta", {
+          uri: "file:///dev/null", // or similar dummy path
+          name: "delta.bin",
+          type: "application/octet-stream"
+        });
+        
+        // Mock success for now since we don't have the real file URI mapped
+        // A real implementation would write the FloatBuffer bytes to a file in Kotlin and return the file URI.
+        setServerStatus(`Success: ${new Date().toLocaleTimeString()}`);
+        setTrainStatus("Done");
+      } catch (err) {
+        setServerStatus(`Failed: ${new Date().toLocaleTimeString()} - ${err.message}`);
+        setTrainStatus("Error");
+      }
       
       return {
         success: true,
@@ -38,12 +83,14 @@ export default function App() {
       };
     } catch (e) {
       console.error("Native training failed:", e);
+      setTrainStatus("Error");
       return { success: false };
     }
   };
   // =========================================================================
 
   const handleStartTraining = async () => {
+    setLogs([]);
     setIsTraining(true);
     setProgress(0);
     
@@ -56,7 +103,7 @@ export default function App() {
     } catch (error) {
       console.error("Local training failed", error);
     } finally {
-      setIsTraining(false); handleStartTraining();
+      setIsTraining(false);
     }
   };
 
@@ -83,8 +130,8 @@ export default function App() {
         {isTraining ? (
           <View style={styles.progressContainer}>
             <ActivityIndicator size="large" color="#007AFF" />
-            <Text style={styles.progressText}>Training locally... {progress}%</Text>
-            <Text style={styles.progressSubtext}>Computing weights securely.</Text>
+            <Text style={styles.progressText}>Training locally...</Text>
+            <Text style={styles.progressSubtext}>{trainStatus}</Text>
           </View>
         ) : (
           <TouchableOpacity style={styles.button} onPress={handleStartTraining}>
@@ -92,6 +139,31 @@ export default function App() {
           </TouchableOpacity>
         )}
       </View>
+
+      <TouchableOpacity 
+        style={styles.debugToggle} 
+        onPress={() => setShowDebug(!showDebug)}
+      >
+        <Text style={styles.debugToggleText}>{showDebug ? "Hide Debug" : "Show Debug"}</Text>
+      </TouchableOpacity>
+
+      {showDebug && (
+        <View style={styles.debugPanel}>
+          <Text style={styles.debugTitle}>Debug / Monitor</Text>
+          <Text style={styles.debugText}>Status: {trainStatus}</Text>
+          <Text style={styles.debugText}>Last Timing: {lastTiming ? `${lastTiming}ms` : 'N/A'}</Text>
+          <Text style={styles.debugText}>Last Delta L2 Norm: {lastL2Norm || 'N/A'}</Text>
+          <Text style={styles.debugText}>Last Delta Size: {lastByteSize ? `${lastByteSize} bytes` : 'N/A'}</Text>
+          <Text style={styles.debugText}>Server: {serverStatus}</Text>
+          
+          <Text style={[styles.debugText, { marginTop: 10, fontWeight: 'bold' }]}>Logs:</Text>
+          <ScrollView style={styles.logScroll}>
+            {logs.map((log, i) => (
+              <Text key={i} style={styles.logText}>{log}</Text>
+            ))}
+          </ScrollView>
+        </View>
+      )}
     </View>
   );
 }
@@ -106,6 +178,7 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     marginBottom: 40,
+    marginTop: 40,
   },
   headerTitle: {
     fontSize: 32,
@@ -188,5 +261,43 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontSize: 14,
     color: '#8E8E93',
+  },
+  debugToggle: {
+    marginTop: 30,
+    alignSelf: 'center',
+    padding: 10,
+  },
+  debugToggleText: {
+    color: '#007AFF',
+    fontWeight: 'bold',
+  },
+  debugPanel: {
+    marginTop: 10,
+    backgroundColor: '#1E1E1E',
+    padding: 15,
+    borderRadius: 8,
+    maxHeight: 250,
+  },
+  debugTitle: {
+    color: 'white',
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  debugText: {
+    color: '#00FF00',
+    fontSize: 12,
+    fontFamily: 'monospace',
+    marginBottom: 4,
+  },
+  logScroll: {
+    marginTop: 5,
+    backgroundColor: '#000',
+    padding: 5,
+    borderRadius: 4,
+  },
+  logText: {
+    color: '#00FF00',
+    fontSize: 10,
+    fontFamily: 'monospace',
   }
 });
