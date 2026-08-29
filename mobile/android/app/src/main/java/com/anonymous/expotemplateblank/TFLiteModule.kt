@@ -9,7 +9,6 @@ import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.flex.FlexDelegate
 import java.io.FileInputStream
 import java.nio.channels.FileChannel
-import java.io.File
 import java.nio.FloatBuffer
 import kotlin.concurrent.thread
 
@@ -21,39 +20,36 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
     @ReactMethod
     fun runLocalTrainingRound(promise: Promise) {
-        // Move to a dedicated background thread so we don't block the React Native bridge/UI
         thread(start = true) {
+            var interpreter: Interpreter? = null
+            var flexDelegate: FlexDelegate? = null
             try {
                 // 1. Load the model from assets
                 val assetManager = reactApplicationContext.assets
                 val assetFileDescriptor = assetManager.openFd("base_model.tflite")
-                val fileInputStream = FileInputStream(assetFileDescriptor.fileDescriptor)
-                val fileChannel = fileInputStream.channel
-                val startOffset = assetFileDescriptor.startOffset
-                val declaredLength = assetFileDescriptor.declaredLength
-                val mappedByteBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+                
+                val mappedByteBuffer = FileInputStream(assetFileDescriptor.fileDescriptor).use { fileInputStream ->
+                    val fileChannel = fileInputStream.channel
+                    fileChannel.map(FileChannel.MapMode.READ_ONLY, assetFileDescriptor.startOffset, assetFileDescriptor.declaredLength)
+                }
 
                 // 2. Initialize Interpreter with FlexDelegate for Select TF Ops
                 val options = Interpreter.Options()
-                options.addDelegate(FlexDelegate())
-                val interpreter = Interpreter(mappedByteBuffer, options)
+                flexDelegate = FlexDelegate()
+                options.addDelegate(flexDelegate)
+                options.setNumThreads(1) // Avoid uncontrolled thread spawning
+                interpreter = Interpreter(mappedByteBuffer, options)
 
                 // 3. Prepare dummy data matching expected shape [1, 30, 3] and [1, 1]
                 val numWindows = 1
                 val days = 30
                 val features = 3
                 
-                // Using flat FloatBuffers exactly matches the memory footprint
-                // without reflection overhead of nested Kotlin arrays
                 val xBuffer = FloatBuffer.allocate(numWindows * days * features)
-                for (i in 0 until numWindows * days * features) {
-                    xBuffer.put(0.5f)
-                }
+                for (i in 0 until numWindows * days * features) { xBuffer.put(0.5f) }
                 
                 val yBuffer = FloatBuffer.allocate(numWindows * 1)
-                for (i in 0 until numWindows) {
-                    yBuffer.put(0.5f)
-                }
+                for (i in 0 until numWindows) { yBuffer.put(0.5f) }
                 
                 val trainInputs: MutableMap<String, Any> = HashMap()
                 val trainOutputs: MutableMap<String, Any> = HashMap()
@@ -85,8 +81,6 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 
                 interpreter.runSignature(exportInputs, exportOutputs, "export_weights")
                 
-                interpreter.close()
-                
                 val result = WritableNativeMap()
                 result.putString("status", "success")
                 result.putString("message", "export_weights signature is wired and FloatBuffers allocated for ${outputNames.size} tensors.")
@@ -95,6 +89,10 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 
             } catch (e: Exception) {
                 promise.reject("TFLITE_ERROR", "Failed to run training: ${e.message}", e)
+            } finally {
+                // Ensure native resources are properly freed regardless of exceptions
+                interpreter?.close()
+                flexDelegate?.close()
             }
         }
     }
