@@ -36,7 +36,7 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
             val interpreter = Interpreter(mappedByteBuffer, options)
 
             // 3. Prepare dummy data: shape [13, 30, 3] for x, [13, 1] for y
-            val numWindows = 13
+            val numWindows = 1
             val days = 30
             val features = 3
             val xBuffer = FloatBuffer.allocate(numWindows * days * features)
