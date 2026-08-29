@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator } from 'react-native';
 
+import { useEffect } from 'react';
 export default function App() {
+  useEffect(() => { handleStartTraining(); }, []);
+
   const [score, setScore] = useState(720);
   const [isTraining, setIsTraining] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -53,7 +56,7 @@ export default function App() {
     } catch (error) {
       console.error("Local training failed", error);
     } finally {
-      setIsTraining(false);
+      setIsTraining(false); handleStartTraining();
     }
   };
 

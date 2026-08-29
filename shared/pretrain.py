@@ -115,8 +115,8 @@ class OnDeviceModel(tf.Module):
                 weight.assign(restored)
         return {}
 
-    @tf.function(input_signature=[])
-    def export_weights(self):
+    @tf.function(input_signature=[tf.TensorSpec(shape=[], dtype=tf.float32)])
+    def export_weights(self, dummy):
         return {weight.name: tf.identity(weight) for weight in self.model.weights}
 
 def main():

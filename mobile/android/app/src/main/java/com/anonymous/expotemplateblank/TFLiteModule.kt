@@ -36,14 +36,25 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
             val interpreter = Interpreter(mappedByteBuffer, options)
 
             // 3. Prepare dummy data: shape [13, 30, 3] for x, [13, 1] for y
-            // We just create empty arrays for the spike to see if execution succeeds.
-            val xTrain = Array(13) { Array(30) { FloatArray(3) { 0.5f } } }
-            val yTrain = Array(13) { FloatArray(1) { 0.5f } }
+            val numWindows = 13
+            val days = 30
+            val features = 3
+            val xBuffer = FloatBuffer.allocate(numWindows * days * features)
+            for (i in 0 until numWindows * days * features) {
+                xBuffer.put(0.5f)
+            }
+            xBuffer.rewind()
+            
+            val yBuffer = FloatBuffer.allocate(numWindows * 1)
+            for (i in 0 until numWindows) {
+                yBuffer.put(0.5f)
+            }
+            yBuffer.rewind()
             
             // 4. Run the "train" signature
             val trainInputs: MutableMap<String, Any> = HashMap()
-            trainInputs["x"] = xTrain
-            trainInputs["y"] = yTrain
+            trainInputs["x"] = xBuffer
+            trainInputs["y"] = yBuffer
             val trainOutputs: MutableMap<String, Any> = HashMap()
             trainOutputs["loss"] = FloatBuffer.allocate(1) // Output is a scalar loss
             
@@ -52,7 +63,7 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
             interpreter.runSignature(trainInputs, trainOutputs, "train")
 
             // 5. Compute the delta using export_weights
-            val exportInputs = emptyMap<String, Any>()
+            val exportInputs = mapOf<String, Any>("dummy" to FloatBuffer.allocate(1))
             val exportOutputs: MutableMap<String, Any> = HashMap()
             
             // Dynamically allocate FloatBuffers for all exported weight tensors
