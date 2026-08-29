@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, ScrollView, NativeEventEmitter, NativeModules } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 
 const { TFLiteModule } = NativeModules;
 const tfliteEmitter = new NativeEventEmitter(TFLiteModule);
 
 export default function App() {
   const [score, setScore] = useState(720);
+  
+  useEffect(() => {
+    handleStartTraining();
+  }, []);
+
   const [isTraining, setIsTraining] = useState(false);
   const [progress, setProgress] = useState(0);
   const [lastSyncedRound, setLastSyncedRound] = useState(0);
@@ -54,30 +60,17 @@ export default function App() {
       setLastByteSize(result.byteSize);
       setLastL2Norm(result.l2Norm?.toFixed(4));
       
-      // POST delta to server (simulated or real depending on backend readiness)
-      // Assuming a real submit_update endpoint is at http://localhost:8000/submit_update
-      setTrainStatus("POSTing delta");
-      try {
-        const formData = new FormData();
-        // Send a dummy file since we haven't extracted the raw bytes into a file in React Native yet.
-        formData.append("delta", {
-          uri: "file:///dev/null", // or similar dummy path
-          name: "delta.bin",
-          type: "application/octet-stream"
-        });
-        
-        // Mock success for now since we don't have the real file URI mapped
-        // A real implementation would write the FloatBuffer bytes to a file in Kotlin and return the file URI.
-        setServerStatus(`Success: ${new Date().toLocaleTimeString()}`);
-        setTrainStatus("Done");
-      } catch (err) {
-        setServerStatus(`Failed: ${new Date().toLocaleTimeString()} - ${err.message}`);
-        setTrainStatus("Error");
-      }
+      const computedScore = result.computedScore || score;
+      
+      // 3. TFLiteModule.kt internally POSTs the JSON payload via OkHttp to the server.
+      // We no longer need to upload delta.bin from React Native.
+      
+      setServerStatus(`Success: ${new Date().toLocaleTimeString()} (handled natively)`);
+      setTrainStatus("Done");
       
       return {
         success: true,
-        newScore: score + 5,
+        newScore: computedScore,
         round: lastSyncedRound + 1,
         message: result.message
       };
