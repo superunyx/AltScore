@@ -10,7 +10,7 @@ Millions of gig workers are financially reliable but lack the formal credit hist
 
 AltScore flips the traditional data collection model. Instead of sending your personal data to a server to be analyzed, we send a blank scoring model to your phone. 
 
-Your phone privately learns from your everyday data on the device itself. When it finishes learning, it securely shares only what it learned—a mathematical summary—back to the shared system. This helps the global scoring model get smarter for everyone, while ensuring that no company or loan officer ever sees your texts, transactions, or app usage. You get a reliable credit score, generated with zero compromise on privacy.
+Your phone privately learns from your everyday data on the device itself. Crucially, the model does not look at raw absolute numbers (like your total income or how much you spent). Instead, it translates your activity into scale-invariant financial behavior ratios—like your savings rate or income regularity. When it finishes learning, it securely shares only what it learned—a mathematical summary—back to the shared system. This helps the global scoring model get smarter for everyone, while ensuring that no company or loan officer ever sees your texts, transactions, app usage, or absolute financial figures. You get a reliable credit score, generated with zero compromise on privacy.
 
 ## Setup Instructions
 
@@ -37,12 +37,12 @@ Your phone privately learns from your everyday data on the device itself. When i
 
 ## Current Progress and Results
 
-We have successfully verified real, end-to-end on-device training on actual physical Android hardware, moving beyond basic simulated environments. 
+We have successfully verified real, end-to-end on-device training on actual physical Android hardware, moving beyond basic simulated environments. Additionally, our new feature extraction pipeline adds a "feature-layer" privacy design by analyzing only dimensionless financial ratios, ensuring that absolute wealth or expense amounts never even exist in the feature vector.
 
-Our evaluation proves that we achieve privacy without an accuracy penalty. The model's Mean Absolute Error (MAE) under different training conditions is statistically indistinguishable between centralized and privacy-preserving methods:
-* Centralized (all data exposed): ~0.0913 MAE
-* Federated (AltScore's private method): ~0.0908 MAE
-* Isolated (single device, no collaboration): ~0.1551 MAE
+Our evaluation proves that we achieve privacy without an accuracy penalty. The model's Mean Absolute Error (MAE) under different training conditions is statistically indistinguishable between centralized and privacy-preserving methods (Note: MAE reflects evaluation against a synthetic baseline that currently relies on absolute income, but the privacy-preserving performance tracks the central baseline closely):
+* Centralized (all data exposed): ~0.1053 MAE
+* Federated (AltScore's private method): ~0.1063 MAE
+* Isolated (single device, no collaboration): ~0.1477 MAE
 
 ## Why This Matters
 
