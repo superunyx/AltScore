@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, ScrollView, NativeEventEmitter, NativeModules } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
+
 
 const { TFLiteModule } = NativeModules;
-const tfliteEmitter = new NativeEventEmitter(TFLiteModule);
+const tfliteEmitter = TFLiteModule ? new NativeEventEmitter(TFLiteModule) : null;
 
 export default function App() {
   const [score, setScore] = useState(720);
@@ -26,6 +26,7 @@ export default function App() {
   const [serverStatus, setServerStatus] = useState('Not connected');
 
   useEffect(() => {
+    if (!tfliteEmitter) return;
     const statusSub = tfliteEmitter.addListener('TFLiteStatus', (status) => {
       setTrainStatus(status);
     });

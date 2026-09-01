@@ -34,38 +34,31 @@ class PhoneClient:
             
         score = data['reliability_score']
         app_usage = {item['date']: item for item in data['app_usage']}
-        
-        daily_income = {}
-        for sms in data['sms_logs']:
-            if sms['type'] == 'credit':
-                date_str = sms['timestamp'].split('T')[0]
-                daily_income[date_str] = daily_income.get(date_str, 0) + sms['amount']
+        sms_logs = data.get('sms_logs', [])
                 
         min_date_str = min(app_usage.keys())
         min_date = datetime.strptime(min_date_str, "%Y-%m-%d")
         
         x_windows = []
         y_windows = []
+        import sys
+        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'shared')))
+        from feature_engineering import compute_ratio_features
+
         for start_offset in range(0, 61, 5):
-            window_features = []
-            for i in range(30):
-                current_date = min_date + timedelta(days=start_offset + i)
-                date_str = current_date.strftime("%Y-%m-%d")
-                sessions = app_usage.get(date_str, {}).get('sessions', 0)
-                hours = app_usage.get(date_str, {}).get('hours_active', 0.0)
-                income = daily_income.get(date_str, 0.0)
-                window_features.append([sessions / 15.0, hours / 24.0, income / 500.0])
-                
-            x_windows.append(window_features)
+            window_start = min_date + timedelta(days=start_offset)
+            window_end = window_start + timedelta(days=30)
+            
+            features = compute_ratio_features(sms_logs, app_usage, window_start, window_end)
+            x_windows.append(features)
             y_windows.append([score])
             
-        # Shape: (13, 30, 3) for x_train
         self.x_train = np.array(x_windows, dtype=np.float32)
         self.y_train = np.array(y_windows, dtype=np.float32)
 
     def extract_weights(self):
         export_fn = self.interpreter.get_signature_runner('export_weights')
-        result = export_fn()
+        result = export_fn(dummy=tf.constant(0.0, dtype=tf.float32))
         return {k: v for k, v in result.items()}
 
     def train_and_compute_delta(self, epochs=5):

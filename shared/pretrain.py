@@ -8,6 +8,10 @@ DATA_DIR = "../data/generated_users"
 MODEL_SAVE_PATH = "base_model.keras"
 TFLITE_SAVE_PATH = "base_model.tflite"
 
+import sys
+sys.path.append(os.path.dirname(__file__))
+from feature_engineering import compute_ratio_features
+
 def load_data():
     X = []
     y = []
@@ -24,13 +28,7 @@ def load_data():
             
         score = data['reliability_score']
         app_usage = {item['date']: item for item in data['app_usage']}
-        
-        # calculate daily income from SMS
-        daily_income = {}
-        for sms in data['sms_logs']:
-            if sms['type'] == 'credit':
-                date_str = sms['timestamp'].split('T')[0]
-                daily_income[date_str] = daily_income.get(date_str, 0) + sms['amount']
+        sms_logs = data.get('sms_logs', [])
                 
         if not app_usage:
             continue
@@ -39,29 +37,20 @@ def load_data():
         min_date = datetime.strptime(min_date_str, "%Y-%m-%d")
         
         for start_offset in range(0, 61, 5): # 13 windows per user
-            window_features = []
-            for i in range(30):
-                current_date = min_date + timedelta(days=start_offset + i)
-                date_str = current_date.strftime("%Y-%m-%d")
-                
-                sessions = app_usage.get(date_str, {}).get('sessions', 0)
-                hours = app_usage.get(date_str, {}).get('hours_active', 0.0)
-                income = daily_income.get(date_str, 0.0)
-                
-                # Normalize features
-                window_features.append([sessions / 15.0, hours / 24.0, income / 500.0])
-                
-            X.append(window_features)
+            window_start = min_date + timedelta(days=start_offset)
+            window_end = window_start + timedelta(days=30)
+            
+            features = compute_ratio_features(sms_logs, app_usage, window_start, window_end)
+            X.append(features)
             y.append(score)
         
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
 
 def build_keras_model():
     model = tf.keras.Sequential([
-        tf.keras.layers.InputLayer(input_shape=(30, 3)),
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(16, activation='relu'),
+        tf.keras.layers.InputLayer(input_shape=(8,)),
         tf.keras.layers.Dense(8, activation='relu'),
+        tf.keras.layers.Dense(4, activation='relu'),
         tf.keras.layers.Dense(1, activation='sigmoid')
     ])
     model.compile(optimizer='adam', loss='mse', metrics=['mae'])
@@ -79,7 +68,7 @@ class OnDeviceModel(tf.Module):
         self.optimizer = tf.keras.optimizers.SGD(learning_rate=0.02)
 
     @tf.function(input_signature=[
-        tf.TensorSpec([None, 30, 3], tf.float32),
+        tf.TensorSpec([None, 8], tf.float32),
         tf.TensorSpec([None, 1], tf.float32)
     ])
     def train(self, x, y):
@@ -90,7 +79,7 @@ class OnDeviceModel(tf.Module):
         self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
         return {"loss": loss}
 
-    @tf.function(input_signature=[tf.TensorSpec([None, 30, 3], tf.float32)])
+    @tf.function(input_signature=[tf.TensorSpec([None, 8], tf.float32)])
     def infer(self, x):
         return {"output": self.model(x, training=False)}
 

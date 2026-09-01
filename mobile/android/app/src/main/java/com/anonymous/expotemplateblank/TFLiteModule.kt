@@ -19,6 +19,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.concurrent.thread
 import kotlin.math.sqrt
+import java.util.Date
+import java.text.SimpleDateFormat
+import java.util.Locale
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -123,13 +126,17 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                     initWeightsMap[name] = arr
                 }
 
-                // 3. Prepare dummy data matching expected shape [1, 30, 3] and [1, 1]
+                // 3. Prepare dummy data matching expected shape [1, 8] and [1, 1]
                 val numWindows = 1
-                val days = 30
-                val features = 3
+                val features = 8
                 
-                val xBuffer = FloatBuffer.allocate(numWindows * days * features)
-                for (i in 0 until numWindows * days * features) { xBuffer.put(0.5f) }
+                val xBuffer = FloatBuffer.allocate(numWindows * features)
+                val dummySmsLogs = emptyList<Map<String, Any>>()
+                val dummyAppUsage = emptyMap<String, Map<String, Any>>()
+                val computedFeatures = computeRatioFeatures(dummySmsLogs, dummyAppUsage, 0L, 30L * 24 * 60 * 60 * 1000L)
+                for (i in 0 until numWindows) {
+                    xBuffer.put(computedFeatures)
+                }
                 
                 val yBuffer = FloatBuffer.allocate(numWindows * 1)
                 for (i in 0 until numWindows) { yBuffer.put(0.5f) }
@@ -265,4 +272,161 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
     @ReactMethod
     fun removeListeners(count: Int) {}
+
+    private fun computeRatioFeatures(
+        smsLogs: List<Map<String, Any>>, 
+        appUsage: Map<String, Map<String, Any>>, 
+        windowStart: Long, 
+        windowEnd: Long
+    ): FloatArray {
+        val windowSms = smsLogs.filter { sms -> 
+            val tsStr = sms["timestamp"] as String
+            val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+            val dt = format.parse(tsStr)!!.time
+            dt >= windowStart && dt < windowEnd
+        }.sortedBy { 
+            val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+            format.parse(it["timestamp"] as String)!!.time 
+        }
+    
+        val incomes = mutableListOf<Float>()
+        val expenses = mutableListOf<Float>()
+        val incomeTimes = mutableListOf<Long>()
+    
+        for (sms in windowSms) {
+            val amt = kotlin.math.abs((sms["amount"] as Double).toFloat())
+            if (sms["type"] == "credit") {
+                incomes.add(amt)
+                val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+                incomeTimes.add(format.parse(sms["timestamp"] as String)!!.time)
+            } else if (sms["type"] == "debit") {
+                expenses.add(amt)
+            }
+        }
+    
+        var IRI = 0.5f
+        var ISI = 0.5f
+        var EIR = 0.0f
+        var SR = 0.0f
+        var SF = 0.0f
+        var TD = 0.0f
+        var EC = 0.5f
+        var lowConfidence = 0.0f
+    
+        val sumIncome = incomes.sum()
+        val sumExpense = expenses.sum()
+    
+        if (incomes.size < 4) {
+            lowConfidence = 1.0f
+            val hours = mutableListOf<Float>()
+            val numDays = ((windowEnd - windowStart) / (1000 * 60 * 60 * 24)).toInt()
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            for (i in 0 until numDays) {
+                val currDate = windowStart + i * 24 * 60 * 60 * 1000L
+                val dateStr = dateFormat.format(Date(currDate))
+                val usage = appUsage[dateStr]
+                val h = (usage?.get("hours_active") as? Double)?.toFloat() ?: 0.0f
+                hours.add(h)
+            }
+            val meanHours = if (hours.isNotEmpty()) hours.sum() / hours.size else 0.0f
+            if (meanHours > 0) {
+                val varHours = hours.map { (it - meanHours) * (it - meanHours) }.sum() / hours.size
+                val stdHours = sqrt(varHours.toDouble()).toFloat()
+                val cvHours = stdHours / meanHours
+                EC = 1.0f / (1.0f + cvHours)
+            } else {
+                EC = 0.0f
+            }
+        } else {
+            val gaps = mutableListOf<Float>()
+            for (i in 1 until incomeTimes.size) {
+                gaps.add((incomeTimes[i] - incomeTimes[i - 1]) / (1000.0f * 60.0f * 60.0f * 24.0f))
+            }
+            if (gaps.isNotEmpty()) {
+                val meanGap = gaps.sum() / gaps.size
+                if (meanGap > 0) {
+                    val varGap = gaps.map { (it - meanGap) * (it - meanGap) }.sum() / gaps.size
+                    val stdGap = sqrt(varGap.toDouble()).toFloat()
+                    val cvGap = stdGap / meanGap
+                    IRI = 1.0f / (1.0f + cvGap)
+                }
+            }
+    
+            val meanIncome = sumIncome / incomes.size
+            if (meanIncome > 0) {
+                val varIncome = incomes.map { (it - meanIncome) * (it - meanIncome) }.sum() / incomes.size
+                val stdIncome = sqrt(varIncome.toDouble()).toFloat()
+                val cvIncome = stdIncome / meanIncome
+                ISI = 1.0f / (1.0f + cvIncome)
+            }
+    
+            if (sumIncome > 0) {
+                val eirRaw = sumExpense / sumIncome
+                EIR = kotlin.math.max(0.0f, kotlin.math.min(2.0f, eirRaw))
+            }
+    
+            if (sumIncome > 0) {
+                SR = (sumIncome - sumExpense) / sumIncome
+            }
+    
+            val midPoint = windowStart + 15 * 24 * 60 * 60 * 1000L
+            var earlyIncomes = 0.0f
+            var earlyExpenses = 0.0f
+            var lateIncomes = 0.0f
+            var lateExpenses = 0.0f
+    
+            for (sms in windowSms) {
+                val amt = kotlin.math.abs((sms["amount"] as Double).toFloat())
+                val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+                val dt = format.parse(sms["timestamp"] as String)!!.time
+                if (dt in windowStart until midPoint) {
+                    if (sms["type"] == "credit") earlyIncomes += amt
+                    else if (sms["type"] == "debit") earlyExpenses += amt
+                } else if (dt in midPoint until windowEnd) {
+                    if (sms["type"] == "credit") lateIncomes += amt
+                    else if (sms["type"] == "debit") lateExpenses += amt
+                }
+            }
+    
+            if (earlyIncomes > 0 && lateIncomes > 0) {
+                val srEarly = (earlyIncomes - earlyExpenses) / earlyIncomes
+                val srLate = (lateIncomes - lateExpenses) / lateIncomes
+                TD = srLate - srEarly
+            }
+        }
+    
+        var periodsWithTx = 0
+        var shortfallPeriods = 0
+        for (w in 0 until 5) {
+            val pStart = windowStart + w * 7 * 24 * 60 * 60 * 1000L
+            val pEndCand = windowStart + (w + 1) * 7 * 24 * 60 * 60 * 1000L
+            val pEnd = kotlin.math.min(pEndCand, windowEnd)
+            if (pStart >= pEnd) break
+    
+            var pInc = 0.0f
+            var pExp = 0.0f
+            var txCount = 0
+            for (sms in windowSms) {
+                val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+                val dt = format.parse(sms["timestamp"] as String)!!.time
+                if (dt in pStart until pEnd) {
+                    txCount++
+                    val amt = kotlin.math.abs((sms["amount"] as Double).toFloat())
+                    if (sms["type"] == "credit") pInc += amt
+                    else if (sms["type"] == "debit") pExp += amt
+                }
+            }
+            if (txCount > 0) {
+                periodsWithTx++
+                if (pExp > pInc) {
+                    shortfallPeriods++
+                }
+            }
+        }
+        if (periodsWithTx > 0) {
+            SF = shortfallPeriods.toFloat() / periodsWithTx.toFloat()
+        }
+    
+        return floatArrayOf(IRI, ISI, EIR, SR, SF, TD, EC, lowConfidence)
+    }
 }
