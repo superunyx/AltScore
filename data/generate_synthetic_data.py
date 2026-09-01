@@ -4,12 +4,12 @@ import uuid
 import os
 from datetime import datetime, timedelta
 
-NUM_USERS = 50
+NUM_USERS = 150
 OUTPUT_DIR = "generated_users"
 
 def generate_user_data(user_id, profile):
     """
-    Generates 30 days of mock gig worker data based on a behavior profile.
+    Generates 90 days of mock gig worker data based on a behavior profile.
     Profiles: 'reliable', 'sporadic', 'declining', 'improving'
     """
     end_date = datetime.now()
@@ -20,33 +20,72 @@ def generate_user_data(user_id, profile):
     
     total_income = 0
     active_days = 0
+
+    # 1. Draw a hidden "true reliability" score for this user based on their profile
+    if profile == 'reliable':
+        base_reliability = random.uniform(0.75, 0.95)
+    elif profile == 'sporadic':
+        base_reliability = random.uniform(0.15, 0.45)
+    elif profile == 'declining':
+        base_reliability = random.uniform(0.3, 0.6) # Ends up lower
+    elif profile == 'improving':
+        base_reliability = random.uniform(0.5, 0.8) # Ends up higher
+        
+    # Ground truth score (with slight irreducible noise)
+    true_reliability = min(1.0, max(0.0, base_reliability + random.uniform(-0.05, 0.05)))
+    reliability_score = round(true_reliability, 4)
+    
+    # Deriving generation parameters from true reliability
+    # Add irreducible noise to the parameter mappings so no single feature perfectly reveals the hidden state
+    base_income_prob = 0.3 + (0.5 * true_reliability) + random.uniform(-0.1, 0.1)
+    base_expense_prob = 0.5 - (0.3 * true_reliability) + random.uniform(-0.1, 0.1)
+    
+    # Increase mapping noise for volatility to reduce ISI R^2 from 0.85 to ~0.65
+    volatility = 0.6 - (0.5 * true_reliability) + random.uniform(-0.15, 0.15)
+    
+    # Add mapping noise for expense ratio
+    expense_ratio = 0.9 - (0.6 * true_reliability) + random.uniform(-0.15, 0.15)
+    
+    # Clamp valid ranges
+    base_income_prob = min(0.95, max(0.1, base_income_prob))
+    base_expense_prob = min(0.95, max(0.1, base_expense_prob))
+    volatility = min(0.9, max(0.05, volatility))
+    expense_ratio = min(1.2, max(0.3, expense_ratio))
+    
+    # We still keep some app usage generation for the cold-start EC fallback, but it's no longer the primary driver
     
     for day in range(90):
         current_date = start_date + timedelta(days=day)
         
-        # Determine daily activity based on profile
-        if profile == 'reliable':
-            active_prob = 0.9
-            hours_base = 8
-        elif profile == 'sporadic':
-            active_prob = 0.4
-            hours_base = 5
-        elif profile == 'declining':
-            # Starts high (0.9), drops to low (0.1) over 90 days
-            active_prob = 0.9 - (day / 90) * 0.8
-            hours_base = 9 - (day / 90) * 7
+        # Adjust probabilities dynamically for trend profiles
+        day_factor = day / 90.0
+        if profile == 'declining':
+            income_prob = base_income_prob * (1.0 - 0.7 * day_factor)
+            expense_prob = base_expense_prob * (1.0 + 0.5 * day_factor)
+            active_prob = 0.9 - 0.8 * day_factor
+            hours_base = 9 - 7 * day_factor
         elif profile == 'improving':
-            # Starts low (0.2), increases to high (0.9) over 90 days
-            active_prob = 0.2 + (day / 90) * 0.7
-            hours_base = 3 + (day / 90) * 6
-            
+            income_prob = base_income_prob * (0.3 + 0.7 * day_factor)
+            expense_prob = base_expense_prob * (1.0 - 0.5 * day_factor)
+            active_prob = 0.2 + 0.7 * day_factor
+            hours_base = 3 + 6 * day_factor
+        else:
+            income_prob = base_income_prob
+            expense_prob = base_expense_prob
+            if profile == 'reliable':
+                active_prob = 0.9
+                hours_base = 8
+            else: # sporadic
+                active_prob = 0.4
+                hours_base = 5
+                
         is_active = random.random() < active_prob
         
         if is_active:
             active_days += 1
             sessions = random.randint(3, 12)
             hours = hours_base + random.uniform(-1.5, 1.5)
-            hours = max(1, min(14, hours)) # Bound between 1 and 14
+            hours = max(1, min(14, hours))
             
             app_usage.append({
                 "date": current_date.strftime("%Y-%m-%d"),
@@ -54,21 +93,25 @@ def generate_user_data(user_id, profile):
                 "hours_active": round(hours, 2)
             })
             
-            # SMS transactions for income on active days
-            if random.random() < 0.85: # 85% chance of getting paid on an active day
-                amount = random.uniform(30, 120)
-                total_income += amount
-                sms_logs.append({
-                    "timestamp": (current_date + timedelta(hours=random.randint(12, 22))).strftime("%Y-%m-%dT%H:%M:%S"),
-                    "sender": "MobileMoney",
-                    "text": f"Received ${amount:.2f} from GigPlatform.",
-                    "amount": round(amount, 2),
-                    "type": "credit"
-                })
-        
-        # Add some random daily expenses via SMS
-        if random.random() < 0.35:
-            expense = random.uniform(5, 45)
+        # Income generation (tied to income_prob, not just being active)
+        if random.random() < income_prob:
+            amount = 80.0 * (1.0 + random.uniform(-volatility, volatility))
+            amount = max(10.0, amount)
+            total_income += amount
+            sms_logs.append({
+                "timestamp": (current_date + timedelta(hours=random.randint(12, 22))).strftime("%Y-%m-%dT%H:%M:%S"),
+                "sender": "MobileMoney",
+                "text": f"Received ${amount:.2f} from GigPlatform.",
+                "amount": round(amount, 2),
+                "type": "credit"
+            })
+            
+        # Expense generation
+        if random.random() < expense_prob:
+            # Expected expense is a fraction of expected income
+            expected_expense = 80.0 * expense_ratio
+            expense = expected_expense * (1.0 + random.uniform(-volatility, volatility))
+            expense = max(1.0, expense)
             sms_logs.append({
                 "timestamp": (current_date + timedelta(hours=random.randint(8, 20))).strftime("%Y-%m-%dT%H:%M:%S"),
                 "sender": "MobileMoney",
@@ -76,25 +119,7 @@ def generate_user_data(user_id, profile):
                 "amount": -round(expense, 2),
                 "type": "debit"
             })
-            
-    # Calculate Reliability Score (0.0 to 1.0)
-    # Metric 1: Consistency (percentage of days active)
-    consistency = active_days / 90.0
-    
-    # Metric 2: Income regularity (normalized to expected max of ~$6000 over 90 days)
-    income_factor = min(1.0, total_income / 6000.0) 
-    
-    # Metric 3: Trajectory (last 30 days vs first 30 days activity)
-    first_30_active = sum(1 for log in app_usage if log['date'] <= (start_date + timedelta(days=30)).strftime("%Y-%m-%d"))
-    last_30_active = sum(1 for log in app_usage if log['date'] >= (start_date + timedelta(days=60)).strftime("%Y-%m-%d"))
-    
-    trend = (last_30_active - first_30_active) / 30.0 # Range roughly -1.0 to 1.0
-    trend_factor = (trend + 1) / 2 # Normalize to 0.0 - 1.0
-    
-    # Reliability Formula: 45% consistency, 35% income, 20% trajectory
-    reliability_score = (0.45 * consistency) + (0.35 * income_factor) + (0.20 * trend_factor)
-    reliability_score = round(max(0.0, min(1.0, reliability_score)), 4)
-    
+
     return {
         "user_id": user_id,
         "profile": profile,
@@ -108,6 +133,8 @@ def generate_user_data(user_id, profile):
     }
 
 def main():
+    import shutil
+    shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     profiles = ['reliable', 'sporadic', 'declining', 'improving']
     
