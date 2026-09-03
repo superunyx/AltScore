@@ -8,10 +8,15 @@ import sys
 sys.path.append('../shared')
 from crypto_utils import generate_server_keypair, load_public_key_pem, load_private_key, decrypt_payload
 from fastapi import HTTPException
-from fastapi import FastAPI, BackgroundTasks, Query
+from fastapi import FastAPI, BackgroundTasks, Query, Header, HTTPException
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+import os
+
 from pydantic import BaseModel
 from typing import Dict, List, Any
 
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "hackathon-secret-123")
 app = FastAPI(title="AltScore Federated Learning Server")
 
 MIN_CLIENTS_PER_ROUND = 5
@@ -35,6 +40,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS clients (client_id TEXT PRIMARY KEY, registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS rounds (round_id INTEGER PRIMARY KEY AUTOINCREMENT, num_clients INTEGER, aggregated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS global_models (version INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS score_submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id TEXT, score REAL, submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
 
@@ -178,12 +184,74 @@ def get_global_model():
     version, path = get_current_model()
     return {"version": version, "file_path": path}
 
-@app.get("/score/{user_id}")
-def get_score(user_id: str, model_output: float = Query(..., description="The locally computed model output")):
-    # Record the score and return it
-    print(f"Received AltScore for {user_id}: {model_output}")
-    return {"user_id": user_id, "altscore": model_output, "status": "recorded"}
 
 @app.get("/public_key")
 def get_public_key():
     return {"public_key_pem": load_public_key_pem("keys")}
+
+
+@app.post("/submit_score_for_review")
+async def submit_score_for_review(payload: UpdatePayload):
+    try:
+        decrypted = decrypt_payload({
+            "encrypted_key": payload.encrypted_key,
+            "nonce": payload.nonce,
+            "ciphertext": payload.ciphertext
+        }, private_key)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Decryption failed")
+        
+    if not decrypted.get("consent_given"):
+        raise HTTPException(status_code=400, detail="Explicit consent is required")
+        
+    score = decrypted.get("model_output")
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO score_submissions (client_id, score) VALUES (?, ?)", (payload.client_id, score))
+    conn.commit()
+    conn.close()
+    
+    return {"status": "success", "message": "Score submitted successfully"}
+
+def verify_admin(x_admin_token: str = Header(...)):
+    if x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+@app.get("/admin/clients")
+def admin_clients(x_admin_token: str = Header(...)):
+    verify_admin(x_admin_token)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT client_id, registered_at FROM clients ORDER BY registered_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return [{"client_id": r[0], "registered_at": r[1]} for r in rows]
+
+@app.get("/admin/model/versions")
+def admin_model_versions(x_admin_token: str = Header(...)):
+    verify_admin(x_admin_token)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    # Join with rounds roughly (assume each round creates a model, or just return both)
+    c.execute("SELECT version, created_at FROM global_models ORDER BY version DESC")
+    models = c.fetchall()
+    c.execute("SELECT round_id, num_clients, aggregated_at FROM rounds ORDER BY round_id DESC")
+    rounds = c.fetchall()
+    conn.close()
+    return {"models": [{"version": r[0], "created_at": r[1]} for r in models],
+            "rounds": [{"round_id": r[0], "num_clients": r[1], "aggregated_at": r[2]} for r in rounds]}
+
+@app.get("/admin/scores")
+def admin_scores(x_admin_token: str = Header(...)):
+    verify_admin(x_admin_token)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT client_id, score, submitted_at FROM score_submissions ORDER BY submitted_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return [{"client_id": r[0], "score": r[1], "submitted_at": r[2]} for r in rows]
+
+os.makedirs("static", exist_ok=True)
+app.mount("/dashboard", StaticFiles(directory="static", html=True), name="static")
+

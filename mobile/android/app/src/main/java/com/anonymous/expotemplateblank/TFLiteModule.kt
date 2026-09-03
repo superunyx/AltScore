@@ -293,7 +293,7 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 val aesKey = keyGen.generateKey()
                 
                 val nonce = ByteArray(12)
-                secureRandom.nextBytes(nonce)
+                java.security.SecureRandom().nextBytes(nonce)
                 
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                 val gcmSpec = GCMParameterSpec(128, nonce)
@@ -374,6 +374,75 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
         )
         promise.resolve(mode == AppOpsManager.MODE_ALLOWED)
     }
+
+    @ReactMethod
+    fun submitScoreForReview(score: Float, clientId: String, promise: Promise) {
+        Thread {
+            try {
+                // Fetch Public Key
+                val pubReq = Request.Builder().url("http://127.0.0.1:8000/public_key").get().build()
+                var pubPem = ""
+                client.newCall(pubReq).execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("Failed to fetch public key: ${response.code}")
+                    val obj = org.json.JSONObject(response.body?.string() ?: "")
+                    pubPem = obj.getString("public_key_pem")
+                }
+                
+                val pubPemClean = pubPem.replace("-----BEGIN PUBLIC KEY-----", "")
+                                        .replace("-----END PUBLIC KEY-----", "").replace("\n", "").replace("\r", "")
+                val pubBytes = android.util.Base64.decode(pubPemClean, android.util.Base64.DEFAULT)
+                val spec = java.security.spec.X509EncodedKeySpec(pubBytes)
+                val kf = java.security.KeyFactory.getInstance("RSA")
+                val rsaPub = kf.generatePublic(spec)
+                
+                // Envelope Encryption
+                val innerPayload = org.json.JSONObject()
+                innerPayload.put("model_output", score.toDouble())
+                innerPayload.put("consent_given", true)
+                innerPayload.put("timestamp", System.currentTimeMillis())
+                
+                val keyGen = javax.crypto.KeyGenerator.getInstance("AES")
+                keyGen.init(256)
+                val aesKey = keyGen.generateKey()
+                
+                val nonce = ByteArray(12)
+                java.security.SecureRandom().nextBytes(nonce)
+                
+                val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+                val gcmSpec = javax.crypto.spec.GCMParameterSpec(128, nonce)
+                cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, aesKey, gcmSpec)
+                
+                val plaintext = innerPayload.toString().toByteArray(Charsets.UTF_8)
+                val ciphertextBytes = cipher.doFinal(plaintext)
+                
+                val rsaCipher = javax.crypto.Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
+                val oaepSpec = javax.crypto.spec.OAEPParameterSpec("SHA-256", "MGF1", java.security.spec.MGF1ParameterSpec.SHA256, javax.crypto.spec.PSource.PSpecified.DEFAULT)
+                rsaCipher.init(javax.crypto.Cipher.ENCRYPT_MODE, rsaPub, oaepSpec)
+                val encryptedKeyBytes = rsaCipher.doFinal(aesKey.encoded)
+                
+                val envelope = org.json.JSONObject()
+                envelope.put("client_id", clientId)
+                envelope.put("encrypted_key", android.util.Base64.encodeToString(encryptedKeyBytes, android.util.Base64.NO_WRAP))
+                envelope.put("nonce", android.util.Base64.encodeToString(nonce, android.util.Base64.NO_WRAP))
+                envelope.put("ciphertext", android.util.Base64.encodeToString(ciphertextBytes, android.util.Base64.NO_WRAP))
+                
+                // POST to server
+                val reqBody = envelope.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val postReq = Request.Builder().url("http://127.0.0.1:8000/submit_score_for_review").post(reqBody).build()
+                
+                client.newCall(postReq).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        promise.reject("ERR", "Server rejected score submission: ${response.code}")
+                    } else {
+                        promise.resolve(true)
+                    }
+                }
+            } catch (e: Exception) {
+                promise.reject("ERR", e.message)
+            }
+        }.start()
+    }
+
 
     @ReactMethod
     fun openUsageStatsSettings(promise: Promise) {

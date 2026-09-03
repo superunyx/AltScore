@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AltScore Admin Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: -apple-system, sans-serif; background: #f4f4f5; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        .btn { padding: 10px 15px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        #auth-section { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AltScore Dashboard</h1>
+        
+        <div id="auth-section" class="card">
+            <input type="password" id="token" placeholder="Admin Token" value="hackathon-secret-123" />
+            <button class="btn" onclick="loadData()">Load Data</button>
+        </div>
+
+        <div class="card">
+            <h2>Operational Data (Private Federated Learning)</h2>
+            <div style="display: flex; gap: 20px;">
+                <div style="flex: 1;">
+                    <h3>Registered Clients</h3>
+                    <table id="clients-table">
+                        <tr><th>Client ID</th><th>Registered At</th></tr>
+                    </table>
+                </div>
+                <div style="flex: 1;">
+                    <h3>Model Rounds</h3>
+                    <table id="rounds-table">
+                        <tr><th>Round</th><th>Contributors</th><th>Timestamp</th></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="border: 2px solid #2563eb;">
+            <h2>Opt-in Shared Scores (Explicit User Consent)</h2>
+            <p style="color: #666; font-size: 14px;">This data is strictly separate from the operational FL pipeline. It only appears here when users explicitly submit their scores for a loan application.</p>
+            <table id="scores-table">
+                <tr><th>Client ID</th><th>Score</th><th>Submitted At</th></tr>
+            </table>
+            <canvas id="scoresChart" height="100" style="margin-top:20px;"></canvas>
+        </div>
+    </div>
+
+    <script>
+        let scoresChart = null;
+
+        async function fetchAPI(path) {
+            const token = document.getElementById('token').value;
+            const res = await fetch(path, { headers: { 'X-Admin-Token': token } });
+            if (!res.ok) throw new Error('Auth failed');
+            return res.json();
+        }
+
+        async function loadData() {
+            try {
+                const clients = await fetchAPI('/admin/clients');
+                const tbodyC = document.getElementById('clients-table');
+                tbodyC.innerHTML = '<tr><th>Client ID</th><th>Registered At</th></tr>';
+                clients.forEach(c => {
+                    tbodyC.innerHTML += `<tr><td>${c.client_id}</td><td>${c.registered_at}</td></tr>`;
+                });
+
+                const modelsData = await fetchAPI('/admin/model/versions');
+                const tbodyR = document.getElementById('rounds-table');
+                tbodyR.innerHTML = '<tr><th>Round</th><th>Contributors</th><th>Timestamp</th></tr>';
+                modelsData.rounds.forEach(r => {
+                    tbodyR.innerHTML += `<tr><td>${r.round_id}</td><td>${r.num_clients}</td><td>${r.aggregated_at}</td></tr>`;
+                });
+
+                const scores = await fetchAPI('/admin/scores');
+                const tbodyS = document.getElementById('scores-table');
+                tbodyS.innerHTML = '<tr><th>Client ID</th><th>Score</th><th>Submitted At</th></tr>';
+                
+                const labels = [];
+                const data = [];
+
+                scores.forEach(s => {
+                    tbodyS.innerHTML += `<tr><td>${s.client_id}</td><td>${s.score.toFixed(0)}</td><td>${s.submitted_at}</td></tr>`;
+                    labels.push(s.client_id.substring(0,8));
+                    data.push(s.score);
+                });
+
+                if (scoresChart) scoresChart.destroy();
+                const ctx = document.getElementById('scoresChart').getContext('2d');
+                scoresChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{ label: 'Opt-in Scores', data: data, backgroundColor: '#3b82f6' }]
+                    }
+                });
+
+            } catch (e) {
+                alert(e.message);
+            }
+        }
+    </script>
+</body>
+</html>
