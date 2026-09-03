@@ -1,5 +1,16 @@
 package com.anonymous.expotemplateblank
 
+
+import android.provider.Telephony
+import android.app.AppOpsManager
+import android.app.usage.UsageStatsManager
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
+import java.util.regex.Pattern
+import java.util.Calendar
+import android.os.Process
+
 import android.util.Log
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
@@ -144,9 +155,11 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 val features = 8
                 
                 val xBuffer = FloatBuffer.allocate(numWindows * features)
-                val dummySmsLogs = emptyList<Map<String, Any>>()
-                val dummyAppUsage = emptyMap<String, Map<String, Any>>()
-                val computedFeatures = computeRatioFeatures(dummySmsLogs, dummyAppUsage, 0L, 30L * 24 * 60 * 60 * 1000L)
+                val windowEnd = System.currentTimeMillis()
+                val windowStart = windowEnd - (30L * 24 * 60 * 60 * 1000L)
+                val realSmsLogs = getRealSmsLogs(windowStart, windowEnd)
+                val realAppUsage = getRealAppUsage(windowStart, windowEnd)
+                val computedFeatures = computeRatioFeatures(realSmsLogs, realAppUsage, windowStart, windowEnd)
                 for (i in 0 until numWindows) {
                     xBuffer.put(computedFeatures)
                 }
@@ -350,11 +363,138 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
         }
     }
     
+
+    @ReactMethod
+    fun checkUsageStatsPermission(promise: Promise) {
+        val appOps = reactApplicationContext.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            reactApplicationContext.packageName
+        )
+        promise.resolve(mode == AppOpsManager.MODE_ALLOWED)
+    }
+
+    @ReactMethod
+    fun openUsageStatsSettings(promise: Promise) {
+        val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        reactApplicationContext.startActivity(intent)
+        promise.resolve(true)
+    }
+
     @ReactMethod
     fun addListener(eventName: String) {}
 
     @ReactMethod
     fun removeListeners(count: Int) {}
+
+
+    private fun getRealAppUsage(windowStart: Long, windowEnd: Long): Map<String, Map<String, Any>> {
+        val usageStatsManager = reactApplicationContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, windowStart, windowEnd)
+        
+        val appUsageMap = mutableMapOf<String, Map<String, Any>>()
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        
+        for (usage in stats) {
+            val dateStr = dateFormat.format(Date(usage.firstTimeStamp))
+            val activeHours = usage.totalTimeInForeground / (1000.0 * 60.0 * 60.0)
+            
+            val currentMap = appUsageMap[dateStr]?.toMutableMap() ?: mutableMapOf()
+            val currentHours = (currentMap["hours_active"] as? Double) ?: 0.0
+            currentMap["hours_active"] = currentHours + activeHours
+            appUsageMap[dateStr] = currentMap
+        }
+        return appUsageMap
+    }
+
+    private fun getRealSmsLogs(windowStart: Long, windowEnd: Long): List<Map<String, Any>> {
+        val smsLogs = mutableListOf<Map<String, Any>>()
+        val cursor = reactApplicationContext.contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
+            arrayOf(Telephony.Sms.BODY, Telephony.Sms.DATE),
+            "${Telephony.Sms.DATE} >= ? AND ${Telephony.Sms.DATE} <= ?",
+            arrayOf(windowStart.toString(), windowEnd.toString()),
+            Telephony.Sms.DEFAULT_SORT_ORDER
+        )
+        
+        var totalScanned = 0
+        var totalMatched = 0
+        val unparsedPreviews = mutableListOf<String>()
+
+        val debitPat1 = Pattern.compile("(?i)(?:debited|sent|paid|withdrawn|transferred\\s+from).*?(?:Rs\\.?|INR|₹)\\s?([\\d,]+\\.?\\d*)")
+        val debitPat2 = Pattern.compile("(?i)(?:Rs\\.?|INR|₹)\\s?([\\d,]+\\.?\\d*)\\s*(?:is\\s+|was\\s+|has\\s+been\\s+)?(?:debited|sent|paid|withdrawn|transferred|Dr\\.?|DR\\b)")
+        val creditPat1 = Pattern.compile("(?i)(?:credited|received|added).*?(?:Rs\\.?|INR|₹)\\s?([\\d,]+\\.?\\d*)")
+        val creditPat2 = Pattern.compile("(?i)(?:Rs\\.?|INR|₹)\\s?([\\d,]+\\.?\\d*)\\s*(?:is\\s+|was\\s+|has\\s+been\\s+)?(?:credited|received|added|Cr\\.?|CR\\b)")
+        
+        val otpPat = Pattern.compile("(?i)otp|one time password")
+        val promoPat = Pattern.compile("(?i)promo|offer|discount|cashback")
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+
+        cursor?.use {
+            val bodyIndex = it.getColumnIndexOrThrow(Telephony.Sms.BODY)
+            val dateIndex = it.getColumnIndexOrThrow(Telephony.Sms.DATE)
+
+            while (it.moveToNext()) {
+                totalScanned++
+                val body = it.getString(bodyIndex)
+                val dateStr = dateFormat.format(Date(it.getLong(dateIndex)))
+                
+                var matched = false
+                if (otpPat.matcher(body).find() || promoPat.matcher(body).find()) {
+                    // False positive guard: skip OTP/Promo messages entirely
+                } else {
+                    var amountStr: String? = null
+                    var isDebit = false
+                    var isCredit = false
+                    
+                    val d1 = debitPat1.matcher(body)
+                    val d2 = debitPat2.matcher(body)
+                    val c1 = creditPat1.matcher(body)
+                    val c2 = creditPat2.matcher(body)
+                    
+                    if (d1.find()) {
+                        amountStr = d1.group(1)
+                        isDebit = true
+                    } else if (d2.find()) {
+                        amountStr = d2.group(1)
+                        isDebit = true
+                    } else if (c1.find()) {
+                        amountStr = c1.group(1)
+                        isCredit = true
+                    } else if (c2.find()) {
+                        amountStr = c2.group(1)
+                        isCredit = true
+                    }
+                    
+                    if ((isDebit || isCredit) && amountStr != null) {
+                        try {
+                            val amount = amountStr.replace(",", "").toDouble()
+                            val typeStr = if (isDebit) "debit" else "credit"
+                            smsLogs.add(mapOf("timestamp" to dateStr, "amount" to amount, "type" to typeStr))
+                            matched = true
+                        } catch (e: Exception) {}
+                    }
+                }
+                
+                if (matched) {
+                    totalMatched++
+                } else {
+                    if (unparsedPreviews.size < 5) {
+                        unparsedPreviews.add(body.take(40).replace("\n", " "))
+                    }
+                }
+            }
+        }
+        
+        emitLog("SMS Scan: Total=$totalScanned, Financial=$totalMatched")
+        if (unparsedPreviews.isNotEmpty()) {
+            emitLog("Unparsed SMS Previews: $unparsedPreviews")
+        }
+        
+        return smsLogs
+    }
 
     private fun computeRatioFeatures(
         smsLogs: List<Map<String, Any>>, 

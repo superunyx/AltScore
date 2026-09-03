@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, ScrollView, NativeEventEmitter, NativeModules } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, ScrollView, NativeEventEmitter, NativeModules, PermissionsAndroid, Alert, Button } from 'react-native';
 
 
 const { TFLiteModule } = NativeModules;
@@ -83,10 +83,51 @@ export default function App() {
   };
   // =========================================================================
 
+
+  const checkPermissions = async () => {
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.READ_SMS,
+        {
+          title: 'SMS Permission',
+          message: 'We need access to your SMS to compute your AltScore securely on your device.',
+          buttonNeutral: 'Ask Me Later',
+          buttonNegative: 'Cancel',
+          buttonPositive: 'OK',
+        }
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert("Permission Denied", "Cannot compute score without SMS permission.");
+        return false;
+      }
+      
+      const usageGranted = await TFLiteModule.checkUsageStatsPermission();
+      if (!usageGranted) {
+        Alert.alert(
+          "Usage Access Required",
+          "Please enable Usage Access for this app in Settings.",
+          [
+            { text: "Cancel", style: "cancel", onPress: () => {} },
+            { text: "Open Settings", onPress: () => TFLiteModule.openUsageStatsSettings() }
+          ]
+        );
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn(err);
+      return false;
+    }
+  };
+
   const handleStartTraining = async () => {
+    const hasPerms = await checkPermissions();
+    if (!hasPerms) return;
+    
     setLogs([]);
     setIsTraining(true);
     setProgress(0);
+
     
     try {
       const result = await runOnDeviceTraining();
