@@ -3,6 +3,11 @@ import json
 import sqlite3
 import numpy as np
 import tensorflow as tf
+
+import sys
+sys.path.append('../shared')
+from crypto_utils import generate_server_keypair, load_public_key_pem, load_private_key, decrypt_payload
+from fastapi import HTTPException
 from fastapi import FastAPI, BackgroundTasks, Query
 from pydantic import BaseModel
 from typing import Dict, List, Any
@@ -16,8 +21,9 @@ BASE_MODEL_PATH = "../shared/base_model.keras"
 
 class UpdatePayload(BaseModel):
     client_id: str
-    weight_delta: Dict[str, List[Any]] # nested lists for NDArrays
-    data_samples: int
+    encrypted_key: str
+    nonce: str
+    ciphertext: str
 
 # In-memory queue for current round
 current_round_updates: List[UpdatePayload] = []
@@ -33,6 +39,10 @@ def init_db():
     conn.close()
 
 def setup():
+    generate_server_keypair('keys')
+    global private_key
+    private_key = load_private_key('keys')
+
     os.makedirs(MODEL_DIR, exist_ok=True)
     init_db()
     # Check if we have at least version 1
@@ -128,6 +138,27 @@ def aggregate_updates():
 async def submit_update(payload: UpdatePayload, background_tasks: BackgroundTasks):
     global current_round_updates, round_lock
     
+    try:
+        decrypted = decrypt_payload({
+            "encrypted_key": payload.encrypted_key,
+            "nonce": payload.nonce,
+            "ciphertext": payload.ciphertext
+        }, private_key)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+        
+    class DecryptedPayload:
+        def __init__(self, c, w, d):
+            self.client_id = c
+            self.weight_delta = w
+            self.data_samples = d
+            
+    decrypted_payload = DecryptedPayload(
+        payload.client_id,
+        decrypted["weight_delta"],
+        decrypted["data_samples"]
+    )
+    
     # Register client
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -135,7 +166,7 @@ async def submit_update(payload: UpdatePayload, background_tasks: BackgroundTask
     conn.commit()
     conn.close()
     
-    current_round_updates.append(payload)
+    current_round_updates.append(decrypted_payload)
     
     if len(current_round_updates) >= MIN_CLIENTS_PER_ROUND and not round_lock:
         background_tasks.add_task(aggregate_updates)
@@ -152,3 +183,7 @@ def get_score(user_id: str, model_output: float = Query(..., description="The lo
     # Record the score and return it
     print(f"Received AltScore for {user_id}: {model_output}")
     return {"user_id": user_id, "altscore": model_output, "status": "recorded"}
+
+@app.get("/public_key")
+def get_public_key():
+    return {"public_key_pem": load_public_key_pem("keys")}

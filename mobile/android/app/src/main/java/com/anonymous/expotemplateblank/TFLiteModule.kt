@@ -28,6 +28,19 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
+
+import java.security.KeyFactory
+import java.security.PublicKey
+import java.security.spec.X509EncodedKeySpec
+import java.security.spec.MGF1ParameterSpec
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.OAEPParameterSpec
+import javax.crypto.spec.PSource
+import android.util.Base64
+import java.security.SecureRandom
+
 import org.json.JSONObject
 import java.io.IOException
 
@@ -185,45 +198,115 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 }
                 interpreter.runSignature(exportInputs, tunedOutputs, "export_weights")
                 
-                val weightDeltaJson = JSONObject()
-                var sumOfSquares = 0.0
                 
-                for (name in outputNames) {
+                var flatDelta = FloatArray(0)
+                var originalL2Norm = 0.0f
+                val keys = outputNames.sorted()
+                
+                for (name in keys) {
                     val buffer = tunedOutputs[name] as FloatBuffer
                     buffer.rewind()
                     val tunedArr = FloatArray(buffer.capacity())
                     buffer.get(tunedArr)
                     
                     val initArr = initWeightsMap[name]!!
-                    val deltaArr = FloatArray(tunedArr.size)
                     for (i in tunedArr.indices) {
                         val diff = tunedArr[i] - initArr[i]
-                        deltaArr[i] = diff
-                        sumOfSquares += diff * diff
+                        flatDelta += diff
+                        originalL2Norm += diff * diff
                     }
-                    
-                    val tensor = interpreter.getOutputTensorFromSignature(name, "export_weights")
-                    val shape = tensor.shape()
-                    val offset = intArrayOf(0)
-                    
-                    val nestedArray = buildNestedJsonArray(deltaArr, shape, offset, 0)
-                    weightDeltaJson.put(name, nestedArray)
+                }
+                originalL2Norm = sqrt(originalL2Norm.toDouble()).toFloat()
+                
+                val clipNorm = 0.5f
+                val noiseMultiplier = 0.05f
+                
+                val clipFactor = kotlin.math.min(1.0f, clipNorm / (originalL2Norm + 1e-12f))
+                for (i in flatDelta.indices) {
+                    flatDelta[i] *= clipFactor
                 }
                 
-                val l2Norm = sqrt(sumOfSquares)
-                emitLog("Delta JSON created successfully (L2: $l2Norm)")
+                val noiseStd = noiseMultiplier * clipNorm
+                val secureRandom = SecureRandom()
+                var postL2 = 0.0f
+                for (i in flatDelta.indices) {
+                    flatDelta[i] += (secureRandom.nextGaussian() * noiseStd).toFloat()
+                    postL2 += flatDelta[i] * flatDelta[i]
+                }
+                val postNoiseL2Norm = sqrt(postL2.toDouble()).toFloat()
+                
+                emitLog("DP Stats: orig_l2=$originalL2Norm, clip=$clipFactor, post_l2=$postNoiseL2Norm")
 
-                // 6. Send OkHttp POST
+                val weightDeltaJson = JSONObject()
+                var offset = 0
+                for (name in keys) {
+                    val tensor = interpreter.getOutputTensorFromSignature(name, "export_weights")
+                    val shape = tensor.shape()
+                    val size = tensor.numElements()
+                    
+                    val sliced = flatDelta.copyOfRange(offset, offset + size)
+                    offset += size
+                    
+                    val offsetArr = intArrayOf(0)
+                    val nestedArray = buildNestedJsonArray(sliced, shape, offsetArr, 0)
+                    weightDeltaJson.put(name, nestedArray)
+                }
+
+                // 6. Fetch Public Key
+                emitStatus("Fetching Public Key")
+                val pubReq = Request.Builder().url("http://127.0.0.1:8000/public_key").get().build()
+                var pubPem = ""
+                client.newCall(pubReq).execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("Failed to fetch public key: ${response.code}")
+                    val obj = JSONObject(response.body?.string() ?: "")
+                    pubPem = obj.getString("public_key_pem")
+                }
+                
+                val pubPemClean = pubPem.replace("-----BEGIN PUBLIC KEY-----", "")
+                                        .replace("-----END PUBLIC KEY-----", "").replace("\n", "")
+                val pubBytes = Base64.decode(pubPemClean, Base64.DEFAULT)
+                val spec = X509EncodedKeySpec(pubBytes)
+                val kf = KeyFactory.getInstance("RSA")
+                val rsaPub = kf.generatePublic(spec)
+                
+                // 7. Envelope Encryption
+                emitStatus("Encrypting Payload")
+                val innerPayload = JSONObject()
+                innerPayload.put("weight_delta", weightDeltaJson)
+                innerPayload.put("data_samples", numWindows)
+                
+                val keyGen = KeyGenerator.getInstance("AES")
+                keyGen.init(256)
+                val aesKey = keyGen.generateKey()
+                
+                val nonce = ByteArray(12)
+                secureRandom.nextBytes(nonce)
+                
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                val gcmSpec = GCMParameterSpec(128, nonce)
+                cipher.init(Cipher.ENCRYPT_MODE, aesKey, gcmSpec)
+                
+                val ciphertext = cipher.doFinal(innerPayload.toString().toByteArray(Charsets.UTF_8))
+                
+                val rsaCipher = Cipher.getInstance("RSA/ECB/OAEPPadding")
+                val oaepParams = OAEPParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT)
+                rsaCipher.init(Cipher.ENCRYPT_MODE, rsaPub, oaepParams)
+                val encryptedKey = rsaCipher.doFinal(aesKey.encoded)
+                
+                // 8. Send OkHttp POST
                 emitStatus("POSTing JSON")
                 val payloadJson = JSONObject()
                 payloadJson.put("client_id", "device_001")
-                payloadJson.put("weight_delta", weightDeltaJson)
-                payloadJson.put("data_samples", numWindows)
+                payloadJson.put("encrypted_key", Base64.encodeToString(encryptedKey, Base64.NO_WRAP))
+                payloadJson.put("nonce", Base64.encodeToString(nonce, Base64.NO_WRAP))
+                payloadJson.put("ciphertext", Base64.encodeToString(ciphertext, Base64.NO_WRAP))
 
                 val jsonStr = payloadJson.toString()
+                val l2Norm = postNoiseL2Norm.toDouble()
+
                 val body = jsonStr.toRequestBody("application/json; charset=utf-8".toMediaType())
                 
-                // Using 10.0.2.2 for Android emulator -> host
+                // Using 127.0.0.1 for Android emulator -> host
                 val request = Request.Builder()
                     .url("http://127.0.0.1:8000/submit_update")
                     .post(body)

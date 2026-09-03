@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 sys.path.append('..')
 from simulation.phone_client import PhoneClient
 from shared.pretrain import load_data, OnDeviceModel
+from shared.differential_privacy import clip_and_add_noise
+from shared.crypto_utils import encrypt_payload
 
 SERVER_URL = "http://127.0.0.1:8000"
 NUM_ROUNDS = 10
@@ -78,9 +80,16 @@ def main():
             print(f"{'='*50}")
             
             # Get latest global model
+            
+            # Get latest global model
             r = requests.get(f"{SERVER_URL}/global_model")
             global_info = r.json()
             model_version = global_info["version"]
+            
+            # Get public key
+            r_pub = requests.get(f"{SERVER_URL}/public_key")
+            server_pub_pem = r_pub.json()["public_key_pem"]
+
             
             keras_path = f"../server/{global_info['file_path']}"
             tflite_path = f"global_model_v{model_version}.tflite"
@@ -110,11 +119,24 @@ def main():
                 l2_norm = np.sqrt(sum(np.sum(np.square(np.array(d))) for d in delta.values()))
                 print(f"   ↳ Weight Delta L2 Norm: {l2_norm:.6f}")
                 
-                payload = {
-                    "client_id": user,
-                    "weight_delta": delta,
+                
+                noised_delta, dp_stats = clip_and_add_noise(delta)
+                print(f"   ↳ DP Stats: original_l2={dp_stats['original_l2_norm']:.4f}, clip_factor={dp_stats['clip_factor_applied']:.4f}, post_noise_l2={dp_stats['post_noise_l2_norm']:.4f}")
+                
+                inner_payload = {
+                    "weight_delta": noised_delta,
                     "data_samples": len(client.x_train)
                 }
+                
+                encrypted_envelope = encrypt_payload(inner_payload, server_pub_pem)
+                
+                payload = {
+                    "client_id": user,
+                    "encrypted_key": encrypted_envelope["encrypted_key"],
+                    "nonce": encrypted_envelope["nonce"],
+                    "ciphertext": encrypted_envelope["ciphertext"]
+                }
+
                 
                 r = requests.post(f"{SERVER_URL}/submit_update", json=payload)
                 print(f"✅ Update sent. Server: {r.json()['message']}")
