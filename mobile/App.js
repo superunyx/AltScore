@@ -8,11 +8,88 @@ import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Svg, { Circle, G, Defs, LinearGradient, Stop, Path, Rect } from 'react-native-svg';
+import Svg, { Circle, G, Defs, LinearGradient, Stop, Path, Rect, Text as SvgText, ClipPath } from 'react-native-svg';
 
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
 const { TFLiteModule } = NativeModules;
 const Tab = createBottomTabNavigator();
 const { width: SW, height: SH } = Dimensions.get('window');
+
+// ─── Intro Animation ────────────────────────────────────────────
+const IntroAnimation = ({ onDone }) => {
+  const fill = useRef(new Animated.Value(0)).current;
+  const shakeX = useRef(new Animated.Value(0)).current;
+  const shakeY = useRef(new Animated.Value(0)).current;
+  const fade = useRef(new Animated.Value(1)).current;
+  const scale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    // Subtle, rapid shaking effect to simulate high energy/loading
+    const shakeLoop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(shakeX, { toValue: 1.5, duration: 40, useNativeDriver: true }),
+          Animated.timing(shakeY, { toValue: -1, duration: 40, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(shakeX, { toValue: -1.5, duration: 40, useNativeDriver: true }),
+          Animated.timing(shakeY, { toValue: 1.5, duration: 40, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(shakeX, { toValue: 0, duration: 40, useNativeDriver: true }),
+          Animated.timing(shakeY, { toValue: 0, duration: 40, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    shakeLoop.start();
+
+    // Fill left-to-right, then explode out
+    Animated.sequence([
+      Animated.delay(200),
+      Animated.timing(fill, { toValue: 260, duration: 1800, useNativeDriver: false }), 
+      Animated.delay(150),
+      Animated.parallel([
+        Animated.timing(scale, { toValue: 1.4, duration: 500, useNativeDriver: true }),
+        Animated.timing(fade, { toValue: 0, duration: 500, useNativeDriver: true }),
+      ])
+    ]).start(() => {
+      shakeLoop.stop();
+      onDone();
+    });
+  }, []);
+
+  return (
+    <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', zIndex: 999, alignItems: 'center', justifyContent: 'center', opacity: fade }]}>
+      <View style={StyleSheet.absoluteFill}><StarField /></View>
+      <Animated.View style={{ width: 260, height: 100, transform: [{ scale }, { translateX: shakeX }, { translateY: shakeY }] }}>
+        
+        {/* Faded background text frame */}
+        <Svg width={260} height={100} style={{ position: 'absolute', top: 0, left: 0 }}>
+          <SvgText x="130" y="65" fontSize="46" fontWeight="900" textAnchor="middle" fill="rgba(255,255,255,0.12)">
+            AltScore
+          </SvgText>
+        </Svg>
+        
+        {/* Neon liquid filling up (clipped by RN View rather than SVG ClipPath) */}
+        <Animated.View style={{ position: 'absolute', left: 0, top: 0, height: 100, width: fill, overflow: 'hidden' }}>
+          <Svg width={260} height={100}>
+            <Defs>
+              <LinearGradient id="liquid" x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor="#00FF87" />
+                <Stop offset="1" stopColor="#60EFFF" />
+              </LinearGradient>
+            </Defs>
+            <SvgText x="130" y="65" fontSize="46" fontWeight="900" textAnchor="middle" fill="url(#liquid)">
+              AltScore
+            </SvgText>
+          </Svg>
+        </Animated.View>
+
+      </Animated.View>
+    </Animated.View>
+  );
+};
 
 // ─── Starry Background ──────────────────────────────────────────
 // Deterministic star positions so they don't shift on re-render
@@ -781,12 +858,15 @@ function RootTabs() {
 }
 
 export default function App() {
+  const [splashDone, setSplashDone] = useState(false);
+
   return (
     <SafeAreaProvider style={{ flex: 1, backgroundColor: C.bg }}>
       <StarField />
       <NavigationContainer theme={NavTheme}>
         <RootTabs />
       </NavigationContainer>
+      {!splashDone && <IntroAnimation onDone={() => setSplashDone(true)} />}
     </SafeAreaProvider>
   );
 }
