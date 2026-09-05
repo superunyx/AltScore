@@ -69,7 +69,20 @@ def setup():
 @app.on_event("startup")
 def startup():
     setup()
-
+    port = int(os.environ.get("PORT", 8000))
+    print(f"\n--- AltScore Server Started ---")
+    print(f"Local: http://127.0.0.1:{port}")
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Doesn't have to be reachable, just forces socket to pick the default LAN interface
+        s.connect(("8.8.8.8", 80))
+        lan_ip = s.getsockname()[0]
+        s.close()
+        print(f"LAN:   http://{lan_ip}:{port}")
+    except Exception:
+        print("LAN:   [Could not detect LAN IP]")
+    print(f"-------------------------------\n")
 def get_current_model():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -255,3 +268,12 @@ def admin_scores(x_admin_token: str = Header(...)):
 os.makedirs("static", exist_ok=True)
 app.mount("/dashboard", StaticFiles(directory="static", html=True), name="static")
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    import uvicorn
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host=host, port=port, reload=True)

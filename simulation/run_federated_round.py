@@ -13,7 +13,7 @@ from shared.pretrain import load_data, OnDeviceModel
 from shared.differential_privacy import clip_and_add_noise
 from shared.crypto_utils import encrypt_payload
 
-SERVER_URL = "http://127.0.0.1:8000"
+SERVER_URL = os.environ.get("ALTSCORE_SERVER_URL", "http://127.0.0.1:8000")
 NUM_ROUNDS = 10
 CLIENTS_PER_ROUND = 5
 DATA_DIR = "../data/generated_users"

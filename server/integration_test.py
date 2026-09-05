@@ -19,6 +19,8 @@ def test_integration():
         stderr=subprocess.DEVNULL
     )
     
+    server_url = os.environ.get("ALTSCORE_SERVER_URL", "http://127.0.0.1:8000")
+    
     # Wait for server to start
     time.sleep(4)
     
@@ -53,7 +55,7 @@ def test_integration():
             }
             
             print(f"Submitting update for client {i+1} ({user})...")
-            r = requests.post("http://127.0.0.1:8000/submit_update", json=payload)
+            r = requests.post(f"{server_url}/submit_update", json=payload)
             print(f"Response: {r.json()}")
             
             # For the first user, also test the score endpoint
@@ -63,7 +65,7 @@ def test_integration():
                 infer_result = infer_fn(x=client.x_train)
                 score = float(infer_result['output'][0][0])
                 
-                r_score = requests.get(f"http://127.0.0.1:8000/score/{user}?model_output={score}")
+                r_score = requests.get(f"{server_url}/score/{user}?model_output={score}")
                 print(f"Tested /score endpoint: {r_score.json()}")
             
         # Wait for aggregation to finish in the background
@@ -71,7 +73,7 @@ def test_integration():
         time.sleep(5)
         
         # Check global model
-        r = requests.get("http://127.0.0.1:8000/global_model")
+        r = requests.get(f"{server_url}/global_model")
         global_info = r.json()
         print(f"\nNew global model info: {global_info}")
         

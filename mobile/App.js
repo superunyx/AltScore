@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  StyleSheet, Text, View, TouchableOpacity, ScrollView,
+  StyleSheet, Text, View, TouchableOpacity, ScrollView, TextInput,
   NativeModules, PermissionsAndroid, Alert, ActivityIndicator,
   Animated, Dimensions, Platform, StatusBar
 } from 'react-native';
@@ -708,8 +708,36 @@ function SettingsScreen() {
   const ins = useSafeAreaInsets();
   const [submitting, setSubmitting] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [serverUrl, setServerUrl] = useState('');
+  const [testingConnection, setTestingConnection] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
-  useEffect(() => { Animated.timing(fade, { toValue: 1, duration: 500, useNativeDriver: true }).start(); }, []);
+
+  useEffect(() => { 
+    Animated.timing(fade, { toValue: 1, duration: 500, useNativeDriver: true }).start(); 
+    AsyncStorage.getItem('@server_url').then(url => { if (url) setServerUrl(url); });
+  }, []);
+
+  const handleSaveUrl = async (url) => {
+    setServerUrl(url);
+    await AsyncStorage.setItem('@server_url', url);
+    if (TFLiteModule) TFLiteModule.setServerBaseUrl(url);
+  };
+
+  const handleTestConnection = async () => {
+    if (!serverUrl) return Alert.alert("Error", "Please enter a server URL first.");
+    setTestingConnection(true);
+    try {
+      const res = await fetch(`${serverUrl}/health`);
+      if (res.ok) {
+        Alert.alert("Success", "Connected to AltScore Server successfully.");
+      } else {
+        Alert.alert("Failed", `Server returned HTTP ${res.status}`);
+      }
+    } catch (e) {
+      Alert.alert("Error", `Could not connect to server: ${e.message}`);
+    }
+    setTestingConnection(false);
+  };
 
   const handleOptInShare = async () => {
     Alert.alert("Share Score for Review",
@@ -755,6 +783,32 @@ function SettingsScreen() {
           <Text style={sty.headerSub}>Configuration & privacy</Text>
         </View>
       </View>
+
+      {/* Server Connection */}
+      <Text style={sty.secTitle}>Server Connection</Text>
+      <Card>
+        <Text style={sty.cardDesc}>Configure the AltScore aggregation server URL. Use your LAN IP (e.g. http://192.168.1.5:8000) or a public tunneling URL.</Text>
+        <View style={{ marginTop: 16 }}>
+          <TextInput
+            style={sty.input}
+            value={serverUrl}
+            onChangeText={handleSaveUrl}
+            placeholder="http://192.168.x.x:8000"
+            placeholderTextColor={C.t4}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+        </View>
+        <View style={{ marginTop: 12 }}>
+          <GradBtn
+            onPress={handleTestConnection}
+            disabled={testingConnection}
+            title={testingConnection ? 'Testing...' : 'Test Connection'}
+            colors={[C.emerald, C.cyan]}
+          />
+        </View>
+      </Card>
 
       {/* Score Sharing */}
       <Text style={sty.secTitle}>Score Sharing</Text>
@@ -860,6 +914,12 @@ function RootTabs() {
 export default function App() {
   const [splashDone, setSplashDone] = useState(false);
 
+  useEffect(() => {
+    AsyncStorage.getItem('@server_url').then(url => { 
+      if (url && TFLiteModule) TFLiteModule.setServerBaseUrl(url); 
+    });
+  }, []);
+
   return (
     <SafeAreaProvider style={{ flex: 1, backgroundColor: C.bg }}>
       <StarField />
@@ -882,6 +942,7 @@ const sty = StyleSheet.create({
   headerSub: { fontSize: 13, color: C.t3, marginTop: 3, fontWeight: '500' },
 
   // Status Pill
+  input: { backgroundColor: 'rgba(255,255,255,0.05)', color: C.w, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', fontSize: 15 },
   statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1 },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusText: { fontSize: 12, fontWeight: '700' },

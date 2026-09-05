@@ -59,9 +59,15 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
     private val TAG = "TFLiteModule"
     private val client = OkHttpClient()
+    private var serverBaseUrl: String? = null
 
     override fun getName(): String {
         return "TFLiteModule"
+    }
+
+    @ReactMethod
+    fun setServerBaseUrl(url: String) {
+        serverBaseUrl = url
     }
     
     private fun emitLog(message: String) {
@@ -267,7 +273,8 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
                 // 6. Fetch Public Key
                 emitStatus("Fetching Public Key")
-                val pubReq = Request.Builder().url("http://127.0.0.1:8000/public_key").get().build()
+                val baseUrl = serverBaseUrl ?: throw IOException("Server not configured")
+                val pubReq = Request.Builder().url("${baseUrl}/public_key").get().build()
                 var pubPem = ""
                 client.newCall(pubReq).execute().use { response ->
                     if (!response.isSuccessful) throw IOException("Failed to fetch public key: ${response.code}")
@@ -319,9 +326,8 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
                 val body = jsonStr.toRequestBody("application/json; charset=utf-8".toMediaType())
                 
-                // Using 127.0.0.1 for Android emulator -> host
                 val request = Request.Builder()
-                    .url("http://127.0.0.1:8000/submit_update")
+                    .url("${baseUrl}/submit_update")
                     .post(body)
                     .build()
                 
@@ -380,7 +386,8 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
         Thread {
             try {
                 // Fetch Public Key
-                val pubReq = Request.Builder().url("http://127.0.0.1:8000/public_key").get().build()
+                val baseUrl = serverBaseUrl ?: throw IOException("Server not configured")
+                val pubReq = Request.Builder().url("${baseUrl}/public_key").get().build()
                 var pubPem = ""
                 client.newCall(pubReq).execute().use { response ->
                     if (!response.isSuccessful) throw IOException("Failed to fetch public key: ${response.code}")
@@ -428,7 +435,7 @@ class TFLiteModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
                 
                 // POST to server
                 val reqBody = envelope.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                val postReq = Request.Builder().url("http://127.0.0.1:8000/submit_score_for_review").post(reqBody).build()
+                val postReq = Request.Builder().url("${baseUrl}/submit_score_for_review").post(reqBody).build()
                 
                 client.newCall(postReq).execute().use { response ->
                     if (!response.isSuccessful) {
