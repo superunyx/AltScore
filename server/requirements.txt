@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pydantic
+numpy
+tensorflow
+streamlit
+Pillow
+cryptography
