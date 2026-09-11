@@ -1,106 +1,640 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>AltScore Admin Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AltScore FL Telemetry</title>
     <style>
-        body { font-family: -apple-system, sans-serif; background: #f4f4f5; margin: 0; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        .btn { padding: 10px 15px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        #auth-section { margin-bottom: 20px; }
+        :root {
+            --bg-color: #EBEBE9;
+            --surface-color: #F5F5F3;
+            --border-color: #D1D1CD;
+            --text-primary: #1A1A1A;
+            --text-secondary: #666666;
+            --focus-accent: #6B2D1C;
+            --error-color: #D93025;
+            --success-color: #0F9D58;
+            --font-ui: system-ui, -apple-system, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, "Courier New", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-ui);
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.4;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background-color: var(--surface-color);
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        .auth-panel {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        input[type="password"], input[type="text"] {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            padding: 6px 10px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            border-radius: 2px;
+            color: var(--text-primary);
+            outline: none;
+        }
+        
+        input[type="password"]:focus, input[type="text"]:focus {
+            border-color: var(--text-secondary);
+        }
+
+        button {
+            font-family: var(--font-ui);
+            font-size: 13px;
+            font-weight: 500;
+            padding: 6px 12px;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        button:hover {
+            background: #E4E4E2;
+        }
+
+        button.primary {
+            background: var(--text-primary);
+            color: var(--surface-color);
+            border-color: var(--text-primary);
+        }
+
+        button.primary:hover {
+            background: #333;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--error-color);
+            margin-right: 6px;
+        }
+
+        .status-indicator.connected {
+            background-color: var(--success-color);
+        }
+
+        #auth-error {
+            color: var(--error-color);
+            font-size: 12px;
+            display: none;
+            margin-right: 12px;
+        }
+
+        main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 280px;
+            background-color: var(--surface-color);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .section {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+
+        .stat-group {
+            margin-bottom: 16px;
+        }
+        
+        .stat-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            font-family: var(--font-mono);
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .timeline-list {
+            list-style: none;
+        }
+
+        .timeline-item {
+            display: flex;
+            justify-content: space-between;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--bg-color);
+        }
+
+        .timeline-item:last-child {
+            border-bottom: none;
+        }
+
+        .timeline-version {
+            color: var(--text-primary);
+        }
+
+        .timeline-meta {
+            color: var(--text-secondary);
+            text-align: right;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-color);
+            position: relative;
+        }
+
+        .table-toolbar {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .table-toolbar .left-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .table-toolbar .right-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .table-container {
+            flex: 1;
+            overflow: auto;
+            position: relative;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background-color: var(--surface-color);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+            padding: 10px 24px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        th:hover {
+            color: var(--text-primary);
+        }
+
+        td {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            padding: 12px 24px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        tr:hover td {
+            background-color: var(--surface-color);
+        }
+
+        .score-cell {
+            color: var(--focus-accent);
+            font-weight: 600;
+        }
+
+        /* Overlays */
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        .overlay-message {
+            font-size: 14px;
+            color: var(--text-secondary);
+            text-align: center;
+            max-width: 400px;
+        }
+
+        .overlay-title {
+            font-size: 16px;
+            color: var(--text-primary);
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        #auto-refresh-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+        
+        .sort-icon {
+            display: inline-block;
+            margin-left: 4px;
+            color: var(--text-primary);
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>AltScore Dashboard</h1>
-        
-        <div id="auth-section" class="card">
-            <input type="password" id="token" placeholder="Admin Token" />
-            <button class="btn" onclick="loadData()">Load Data</button>
+    <header>
+        <h1>AltScore FL Telemetry</h1>
+        <div class="auth-panel">
+            <span id="auth-error">Invalid Token. Please re-check.</span>
+            <span class="status-indicator" id="conn-status" title="Disconnected"></span>
+            <input type="password" id="token-input" placeholder="" aria-label="Admin Token">
+            <button id="connect-btn" class="primary" onclick="handleConnect()">Connect</button>
         </div>
+    </header>
 
-        <div class="card">
-            <h2>Operational Data (Private Federated Learning)</h2>
-            <div style="display: flex; gap: 20px;">
-                <div style="flex: 1;">
-                    <h3>Registered Clients</h3>
-                    <table id="clients-table">
-                        <tr><th>Client ID</th><th>Registered At</th></tr>
-                    </table>
+    <main id="app-main" class="hidden">
+        <aside class="sidebar">
+            <div class="section">
+                <div class="section-title">Overview</div>
+                <div class="stat-group">
+                    <div class="stat-label">Registered Clients</div>
+                    <div class="stat-value" id="val-clients">-</div>
                 </div>
-                <div style="flex: 1;">
-                    <h3>Model Rounds</h3>
-                    <table id="rounds-table">
-                        <tr><th>Round</th><th>Contributors</th><th>Timestamp</th></tr>
-                    </table>
+                <div class="stat-group">
+                    <div class="stat-label">Total Rounds Completed</div>
+                    <div class="stat-value" id="val-rounds">-</div>
+                </div>
+                <div class="stat-group">
+                    <div class="stat-label">Current Model Version</div>
+                    <div class="stat-value" id="val-model">-</div>
                 </div>
             </div>
-        </div>
+            
+            <div class="section" style="flex: 1; border-bottom: none; overflow-y: auto;">
+                <div class="section-title">Training Timeline</div>
+                <ul class="timeline-list" id="timeline-list">
+                    <!-- Populated by JS -->
+                </ul>
+            </div>
+        </aside>
 
-        <div class="card" style="border: 2px solid #2563eb;">
-            <h2>Opt-in Shared Scores (Explicit User Consent)</h2>
-            <p style="color: #666; font-size: 14px;">This data is strictly separate from the operational FL pipeline. It only appears here when users explicitly submit their scores for a loan application.</p>
-            <table id="scores-table">
-                <tr><th>Client ID</th><th>Score</th><th>Submitted At</th></tr>
-            </table>
-            <canvas id="scoresChart" height="100" style="margin-top:20px;"></canvas>
-        </div>
+        <section class="main-content">
+            <div class="table-toolbar">
+                <div class="left-controls">
+                    <div class="section-title" style="margin:0;">Opt-in Scores (Decision Ready)</div>
+                </div>
+                <div class="right-controls">
+                    <input type="text" id="search-input" placeholder="Filter by Client ID..." onkeyup="handleSearch()" style="width: 200px;">
+                    <label id="auto-refresh-label">
+                        <input type="checkbox" id="auto-refresh-toggle" checked onchange="toggleAutoRefresh()">
+                        Auto-refresh (30s)
+                    </label>
+                    <button onclick="fetchData()">Refresh Now</button>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <div id="empty-scores-overlay" class="overlay hidden">
+                    <div class="overlay-title">No scores available</div>
+                    <div class="overlay-message">No clients have explicitly opted in to share their scores yet.</div>
+                </div>
+
+                <table id="scores-table">
+                    <thead>
+                        <tr>
+                            <th onclick="handleSort('client_id')">Client ID <span id="sort-client_id" class="sort-icon"></span></th>
+                            <th onclick="handleSort('score')">Score <span id="sort-score" class="sort-icon"></span></th>
+                            <th onclick="handleSort('submitted_at')">Submitted At <span id="sort-submitted_at" class="sort-icon">▼</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="scores-tbody">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div id="disconnected-overlay" class="overlay">
+        <div class="overlay-title">Disconnected</div>
+        <div class="overlay-message">Enter the operational token to view telemetry.</div>
     </div>
 
     <script>
-        let scoresChart = null;
+        // State
+        let sessionToken = null;
+        let refreshInterval = null;
+        let rawScores = [];
+        let currentSort = { column: 'submitted_at', asc: false };
 
-        async function fetchAPI(path) {
-            const token = document.getElementById('token').value;
-            const res = await fetch(path, { headers: { 'X-Admin-Token': token } });
-            if (!res.ok) throw new Error('Auth failed');
+        // DOM Elements
+        const tokenInput = document.getElementById('token-input');
+        const connectBtn = document.getElementById('connect-btn');
+        const connStatus = document.getElementById('conn-status');
+        const authError = document.getElementById('auth-error');
+        const appMain = document.getElementById('app-main');
+        const disconnectedOverlay = document.getElementById('disconnected-overlay');
+        const searchInput = document.getElementById('search-input');
+        const emptyScoresOverlay = document.getElementById('empty-scores-overlay');
+        const autoRefreshToggle = document.getElementById('auto-refresh-toggle');
+
+        // Allow pressing Enter in token input
+        tokenInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') handleConnect();
+        });
+
+        async function handleConnect() {
+            const token = tokenInput.value.trim();
+            if (!token) {
+                if (sessionToken) handleDisconnect();
+                return;
+            }
+
+            sessionToken = token;
+            connectBtn.disabled = true;
+            connectBtn.textContent = 'Connecting...';
+            authError.style.display = 'none';
+
+            try {
+                await fetchData();
+                // Success
+                tokenInput.value = ''; // clear from UI
+                tokenInput.placeholder = '••••••••';
+                connectBtn.textContent = 'Disconnect';
+                connectBtn.onclick = handleDisconnect;
+                connStatus.classList.add('connected');
+                connStatus.title = 'Connected';
+                disconnectedOverlay.classList.add('hidden');
+                appMain.classList.remove('hidden');
+
+                if (autoRefreshToggle.checked) {
+                    startAutoRefresh();
+                }
+            } catch (err) {
+                // Failure
+                sessionToken = null;
+                connectBtn.textContent = 'Connect';
+                authError.style.display = 'inline';
+                authError.textContent = err.message || 'Invalid Token. Please re-check.';
+            } finally {
+                connectBtn.disabled = false;
+            }
+        }
+
+        function handleDisconnect() {
+            sessionToken = null;
+            tokenInput.value = '';
+            tokenInput.placeholder = '';
+            connectBtn.textContent = 'Connect';
+            connectBtn.onclick = handleConnect;
+            connStatus.classList.remove('connected');
+            connStatus.title = 'Disconnected';
+            disconnectedOverlay.classList.remove('hidden');
+            appMain.classList.add('hidden');
+            stopAutoRefresh();
+        }
+
+        async function fetchAPI(endpoint) {
+            const res = await fetch(endpoint, {
+                headers: { 'x-admin-token': sessionToken }
+            });
+            if (!res.ok) {
+                if (res.status === 401) throw new Error('Invalid Token. Please re-check.');
+                throw new Error(`HTTP Error ${res.status}`);
+            }
             return res.json();
         }
 
-        async function loadData() {
+        async function fetchData() {
+            if (!sessionToken) return;
+
             try {
-                const clients = await fetchAPI('/admin/clients');
-                const tbodyC = document.getElementById('clients-table');
-                tbodyC.innerHTML = '<tr><th>Client ID</th><th>Registered At</th></tr>';
-                clients.forEach(c => {
-                    tbodyC.innerHTML += `<tr><td>${c.client_id}</td><td>${c.registered_at}</td></tr>`;
-                });
+                const [clients, modelData, scores] = await Promise.all([
+                    fetchAPI('/admin/clients'),
+                    fetchAPI('/admin/model/versions'),
+                    fetchAPI('/admin/scores')
+                ]);
 
-                const modelsData = await fetchAPI('/admin/model/versions');
-                const tbodyR = document.getElementById('rounds-table');
-                tbodyR.innerHTML = '<tr><th>Round</th><th>Contributors</th><th>Timestamp</th></tr>';
-                modelsData.rounds.forEach(r => {
-                    tbodyR.innerHTML += `<tr><td>${r.round_id}</td><td>${r.num_clients}</td><td>${r.aggregated_at}</td></tr>`;
-                });
-
-                const scores = await fetchAPI('/admin/scores');
-                const tbodyS = document.getElementById('scores-table');
-                tbodyS.innerHTML = '<tr><th>Client ID</th><th>Score</th><th>Submitted At</th></tr>';
+                renderOverview(clients, modelData);
+                renderTimeline(modelData);
                 
-                const labels = [];
-                const data = [];
+                rawScores = scores;
+                renderScores();
+                
+            } catch (err) {
+                if (err.message.includes('Invalid Token')) {
+                    handleDisconnect();
+                    authError.style.display = 'inline';
+                    authError.textContent = 'Session expired or token invalid.';
+                } else {
+                    console.error('Fetch error:', err);
+                }
+                throw err;
+            }
+        }
 
-                scores.forEach(s => {
-                    tbodyS.innerHTML += `<tr><td>${s.client_id}</td><td>${s.score.toFixed(0)}</td><td>${s.submitted_at}</td></tr>`;
-                    labels.push(s.client_id.substring(0,8));
-                    data.push(s.score);
+        function renderOverview(clients, modelData) {
+            document.getElementById('val-clients').textContent = clients.length.toLocaleString();
+            
+            const models = modelData.models || [];
+            const rounds = modelData.rounds || [];
+            
+            document.getElementById('val-rounds').textContent = rounds.length.toLocaleString();
+            
+            if (models.length > 0) {
+                // Sort models descending by version
+                const latestModel = models.sort((a,b) => b.version - a.version)[0];
+                document.getElementById('val-model').textContent = `v${latestModel.version}`;
+            } else {
+                document.getElementById('val-model').textContent = 'None';
+            }
+        }
+
+        function renderTimeline(modelData) {
+            const rounds = modelData.rounds || [];
+            const list = document.getElementById('timeline-list');
+            list.innerHTML = '';
+
+            if (rounds.length === 0) {
+                list.innerHTML = '<li class="timeline-item" style="color: var(--text-secondary);">No rounds completed.</li>';
+                return;
+            }
+
+            // Sort rounds descending
+            rounds.sort((a,b) => b.round_id - a.round_id).forEach(r => {
+                const d = new Date(r.aggregated_at);
+                const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                
+                const li = document.createElement('li');
+                li.className = 'timeline-item';
+                li.innerHTML = `
+                    <div class="timeline-version">Round ${r.round_id}</div>
+                    <div class="timeline-meta">${r.num_clients} clients (${timeStr})</div>
+                `;
+                list.appendChild(li);
+            });
+        }
+
+        function renderScores() {
+            const tbody = document.getElementById('scores-tbody');
+            const filterText = searchInput.value.toLowerCase();
+            
+            // Filter
+            let filtered = rawScores.filter(s => s.client_id.toLowerCase().includes(filterText));
+            
+            // Sort
+            filtered.sort((a, b) => {
+                let valA = a[currentSort.column];
+                let valB = b[currentSort.column];
+                
+                if (typeof valA === 'string') valA = valA.toLowerCase();
+                if (typeof valB === 'string') valB = valB.toLowerCase();
+                
+                if (valA < valB) return currentSort.asc ? -1 : 1;
+                if (valA > valB) return currentSort.asc ? 1 : -1;
+                return 0;
+            });
+
+            if (filtered.length === 0) {
+                emptyScoresOverlay.classList.remove('hidden');
+                if (filterText) {
+                    emptyScoresOverlay.querySelector('.overlay-message').textContent = 'No scores match your search filter.';
+                } else {
+                    emptyScoresOverlay.querySelector('.overlay-message').textContent = 'No clients have explicitly opted in to share their scores yet.';
+                }
+                tbody.innerHTML = '';
+            } else {
+                emptyScoresOverlay.classList.add('hidden');
+                tbody.innerHTML = '';
+                filtered.forEach(s => {
+                    const d = new Date(s.submitted_at);
+                    const dateStr = d.toISOString().replace('T', ' ').substring(0, 16);
+                    
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${s.client_id}</td>
+                        <td class="score-cell">${s.score.toFixed(0)}</td>
+                        <td>${dateStr}</td>
+                    `;
+                    tbody.appendChild(tr);
                 });
+            }
 
-                if (scoresChart) scoresChart.destroy();
-                const ctx = document.getElementById('scoresChart').getContext('2d');
-                scoresChart = new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{ label: 'Opt-in Scores', data: data, backgroundColor: '#3b82f6' }]
-                    }
-                });
+            // Update sort icons
+            document.querySelectorAll('.sort-icon').forEach(el => el.textContent = '');
+            document.getElementById(`sort-${currentSort.column}`).textContent = currentSort.asc ? '▲' : '▼';
+        }
 
-            } catch (e) {
-                alert(e.message);
+        function handleSort(column) {
+            if (currentSort.column === column) {
+                currentSort.asc = !currentSort.asc;
+            } else {
+                currentSort.column = column;
+                currentSort.asc = column === 'score' ? false : true; // default numeric sort descending
+            }
+            renderScores();
+        }
+
+        function handleSearch() {
+            renderScores();
+        }
+
+        function toggleAutoRefresh() {
+            if (autoRefreshToggle.checked) {
+                startAutoRefresh();
+            } else {
+                stopAutoRefresh();
+            }
+        }
+
+        function startAutoRefresh() {
+            stopAutoRefresh();
+            refreshInterval = setInterval(() => {
+                if (sessionToken) fetchData();
+            }, 30000);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
             }
         }
     </script>
