@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, ScrollView, TextInput,
   NativeModules, PermissionsAndroid, Alert, ActivityIndicator,
-  Animated, Dimensions, Platform, StatusBar
+  Animated, Dimensions, Platform, StatusBar, Switch
 } from 'react-native';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Circle, G, Defs, LinearGradient, Stop, Path, Rect, Text as SvgText, ClipPath } from 'react-native-svg';
+import { DEFAULT_SERVER_URL } from './config';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
@@ -359,6 +360,37 @@ function DashboardScreen() {
   const [histLen, setHistLen] = useState(0);
   const fade = useRef(new Animated.Value(0)).current;
 
+  const [computing, setComputing] = useState(false);
+
+  const handleComputeScore = async () => {
+    try {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_SMS);
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) return;
+      const usageGranted = await TFLiteModule.checkUsageStatsPermission();
+      if (!usageGranted) {
+        TFLiteModule.openUsageStatsSettings();
+        return;
+      }
+      
+      setComputing(true);
+      const result = await TFLiteModule.computeScoreOnly();
+      if (result && result.computedScore) {
+        const historyStr = await AsyncStorage.getItem('@score_history');
+        const history = historyStr ? JSON.parse(historyStr) : [];
+        history.push({ score: result.computedScore, timestamp: Date.now(), coldStart: result.coldStart });
+        await AsyncStorage.setItem('@score_history', JSON.stringify(history));
+        setScore(result.computedScore);
+        setCold(result.coldStart);
+        setSync(Date.now());
+      }
+    } catch (e) {
+      Alert.alert("Error", e.message);
+    } finally {
+      setComputing(false);
+    }
+  };
+
+
   useEffect(() => {
     Animated.timing(fade, { toValue: 1, duration: 500, useNativeDriver: true }).start();
     const load = async () => {
@@ -401,6 +433,11 @@ function DashboardScreen() {
           <Text style={sty.greeting}>AltScore</Text>
           <Text style={sty.headerSub}>Your privacy-first credit score</Text>
         </View>
+        {score && (
+          <TouchableOpacity onPress={handleComputeScore} disabled={computing}>
+            <View style={sty.expandBtn}><Text style={sty.expandText}>{computing ? 'Computing...' : 'Refresh'}</Text></View>
+          </TouchableOpacity>
+        )}
       </View>
 
       {score ? (
@@ -443,7 +480,15 @@ function DashboardScreen() {
               <IconBolt color={C.t4} size={28} />
             </View>
             <Text style={sty.emptyTitle}>No Score Yet</Text>
-            <Text style={sty.emptyDesc}>Head to Train to compute your first score.{'\n'}Everything stays on your device.</Text>
+            <View style={{ marginTop: 16 }}>
+              <GradBtn 
+                title={computing ? "Computing..." : "Get My Score"}
+                subtitle="Secure · On-device · Private"
+                onPress={handleComputeScore}
+                disabled={computing}
+                icon={!computing ? <IconBolt color={C.w} size={18} /> : undefined}
+              />
+            </View>
           </View>
         </Card>
       )}
@@ -547,162 +592,6 @@ function HistoryScreen() {
   );
 }
 
-// ─── Train ──────────────────────────────────────────────────────
-function TrainScreen() {
-  const ins = useSafeAreaInsets();
-  const [isTraining, setIsTraining] = useState(false);
-  const [step, setStep] = useState(0);
-  const [logs, setLogs] = useState([]);
-  const fade = useRef(new Animated.Value(0)).current;
-  const blink = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    Animated.timing(fade, { toValue: 1, duration: 500, useNativeDriver: true }).start();
-  }, []);
-
-  useEffect(() => {
-    if (isTraining) {
-      Animated.loop(Animated.sequence([
-        Animated.timing(blink, { toValue: 0.2, duration: 600, useNativeDriver: true }),
-        Animated.timing(blink, { toValue: 1, duration: 600, useNativeDriver: true }),
-      ])).start();
-    } else { blink.setValue(1); }
-  }, [isTraining]);
-
-  const checkPermissions = async () => {
-    try {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.READ_SMS,
-        { title: 'SMS Permission', message: 'We need access to your SMS to compute your AltScore securely on your device.', buttonPositive: 'OK' }
-      );
-      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-        Alert.alert("Permission Denied", "Cannot compute score without SMS permission.");
-        return false;
-      }
-      const usageGranted = await TFLiteModule.checkUsageStatsPermission();
-      if (!usageGranted) {
-        Alert.alert("Usage Access Required", "Please enable Usage Access for this app in Settings.",
-          [{ text: "Cancel", style: "cancel" }, { text: "Open Settings", onPress: () => TFLiteModule.openUsageStatsSettings() }]
-        );
-        return false;
-      }
-      return true;
-    } catch (err) { return false; }
-  };
-
-  const handleStart = async () => {
-    const ok = await checkPermissions();
-    if (!ok) return;
-    setIsTraining(true); setStep(1); setLogs(["Requesting permissions... OK"]);
-    setTimeout(() => { setStep(2); setLogs(l => [...l, "Extracting features from SMS..."]); }, 500);
-    setTimeout(() => { setStep(3); setLogs(l => [...l, "Running local TFLite training..."]); }, 1000);
-    try {
-      if (!TFLiteModule) throw new Error("TFLiteModule not found");
-      const result = await TFLiteModule.runLocalTrainingRound();
-      setStep(4); setLogs(l => [...l, "Applying Differential Privacy noise..."]);
-      setTimeout(() => { setStep(5); setLogs(l => [...l, "Encrypting with AES-256-GCM + RSA-OAEP..."]); }, 500);
-      setTimeout(() => { setStep(6); setLogs(l => [...l, "Uploading encrypted delta...", "✓ Round complete"]); setIsTraining(false); }, 1000);
-      if (result.l2Norm) {
-        const historyStr = await AsyncStorage.getItem('@score_history');
-        const history = historyStr ? JSON.parse(historyStr) : [];
-        history.push({ score: result.l2Norm * 1000, timestamp: Date.now(), coldStart: false });
-        await AsyncStorage.setItem('@score_history', JSON.stringify(history));
-      }
-    } catch (e) {
-      setIsTraining(false);
-      setLogs(l => [...l, `✗ ${e.message}`]);
-    }
-  };
-
-  const pipeline = [
-    { label: 'Permissions', desc: 'SMS & usage access' },
-    { label: 'Feature Extract', desc: 'Parse transaction SMS' },
-    { label: 'Local Training', desc: 'TFLite model on-device' },
-    { label: 'DP Noise', desc: 'Gaussian clip + inject' },
-    { label: 'Encryption', desc: 'AES-256 + RSA wrap' },
-    { label: 'Upload', desc: 'Encrypted delta only' },
-  ];
-
-  return (
-    <Animated.ScrollView style={[sty.screen, { opacity: fade }]} contentContainerStyle={[sty.scroll, { paddingTop: ins.top + 16 }]} showsVerticalScrollIndicator={false} scrollEventThrottle={16} overScrollMode="never">
-      <View style={sty.header}>
-        <View>
-          <Text style={sty.greeting}>Train</Text>
-          <Text style={sty.headerSub}>Federated learning round</Text>
-        </View>
-        {isTraining && (
-          <Animated.View style={[sty.statusPill, { borderColor: C.sky + '30', backgroundColor: C.sky + '10', opacity: blink }]}>
-            <View style={[sty.statusDot, { backgroundColor: C.sky }]} />
-            <Text style={[sty.statusText, { color: C.sky }]}>Running</Text>
-          </Animated.View>
-        )}
-      </View>
-
-      {/* Privacy Banner */}
-      <View style={sty.banner}>
-        <View style={sty.bannerIcon}><IconShield color={C.emerald} size={16} /></View>
-        <Text style={sty.bannerText}>All computation stays on-device. Only encrypted, noised gradients are sent.</Text>
-      </View>
-
-      {/* CTA */}
-      <View style={{ marginBottom: 28 }}>
-        <GradBtn
-          onPress={handleStart}
-          disabled={isTraining}
-          title={isTraining ? 'Training in Progress...' : 'Start Local Training'}
-          subtitle={isTraining ? undefined : 'Secure · On-device · Private'}
-          icon={!isTraining ? <IconBolt color={C.w} size={18} /> : undefined}
-        />
-      </View>
-
-      {/* Pipeline */}
-      {step > 0 && (
-        <>
-          <View style={sty.secRow}>
-            <Text style={sty.secTitle}>Pipeline</Text>
-            <View style={sty.stepCounter}>
-              <Text style={sty.stepCounterText}>{step}/6</Text>
-            </View>
-          </View>
-          <Card style={{ padding: 0, overflow: 'hidden' }}>
-            {pipeline.map((p, i) => (
-              <StepRow key={i} num={i + 1} label={p.label} desc={p.desc} active={step === i + 1} done={step > i + 1} isLast={i === pipeline.length - 1} />
-            ))}
-          </Card>
-        </>
-      )}
-
-      {/* Terminal */}
-      {logs.length > 0 && (
-        <View style={sty.term}>
-          <View style={sty.termBar}>
-            <View style={sty.termDots}>
-              <View style={[sty.termDot, { backgroundColor: '#FF5F57' }]} />
-              <View style={[sty.termDot, { backgroundColor: '#FEBC2E' }]} />
-              <View style={[sty.termDot, { backgroundColor: '#28C840' }]} />
-            </View>
-            <Text style={sty.termTitle}>secure_log</Text>
-          </View>
-          <View style={sty.termBody}>
-            {logs.map((l, i) => (
-              <Text key={i} style={[
-                sty.termLine,
-                l.startsWith('✓') && { color: C.emerald },
-                l.startsWith('✗') && { color: C.rose },
-              ]}>
-                <Text style={{ color: C.t4 }}>{'❯ '}</Text>{l}
-              </Text>
-            ))}
-            {isTraining && <Animated.Text style={[sty.termLine, { color: C.sky, opacity: blink }]}>{'❯ _'}</Animated.Text>}
-          </View>
-        </View>
-      )}
-
-      <View style={{ height: 30 }} />
-    </Animated.ScrollView>
-  );
-}
-
 // ─── Settings (includes Privacy info) ───────────────────────────
 function SettingsScreen() {
   const ins = useSafeAreaInsets();
@@ -711,11 +600,19 @@ function SettingsScreen() {
   const [serverUrl, setServerUrl] = useState('');
   const [testingConnection, setTestingConnection] = useState(false);
   const fade = useRef(new Animated.Value(0)).current;
+  const [trainingEnabled, setTrainingEnabled] = useState(true);
 
   useEffect(() => { 
     Animated.timing(fade, { toValue: 1, duration: 500, useNativeDriver: true }).start(); 
-    AsyncStorage.getItem('@server_url').then(url => { if (url) setServerUrl(url); });
+    AsyncStorage.getItem('@server_url').then(url => { setServerUrl(url !== null ? url : DEFAULT_SERVER_URL); });
+    AsyncStorage.getItem('@training_enabled').then(val => { if (val !== null) setTrainingEnabled(val === 'true'); });
   }, []);
+
+  const toggleTraining = async (val) => {
+    setTrainingEnabled(val);
+    await AsyncStorage.setItem('@training_enabled', val ? 'true' : 'false');
+    TFLiteModule.setTrainingEnabled(val);
+  };
 
   const handleSaveUrl = async (url) => {
     setServerUrl(url);
@@ -783,6 +680,16 @@ function SettingsScreen() {
           <Text style={sty.headerSub}>Configuration & privacy</Text>
         </View>
       </View>
+
+      {/* Background Training */}
+      <Text style={sty.secTitle}>Background Training</Text>
+      <Card>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={[sty.privTitle, { flex: 1 }]}>Contribute to model improvement</Text>
+          <Switch value={trainingEnabled} onValueChange={toggleTraining} trackColor={{ false: C.dim, true: C.emerald }} thumbColor={C.w} />
+        </View>
+        <Text style={[sty.cardDesc, { marginTop: 10 }]}>Trains a small model on your device automatically when charging and on WiFi. Nothing you type or send ever leaves your device unencrypted.</Text>
+      </Card>
 
       {/* Server Connection */}
       <Text style={sty.secTitle}>Server Connection</Text>
@@ -883,7 +790,6 @@ function RootTabs() {
         const sz = focused ? 23 : 21;
         if (route.name === 'Dashboard') return <IconDash color={color} size={sz} />;
         if (route.name === 'History') return <IconClock color={color} size={sz} />;
-        if (route.name === 'Train') return <IconBolt color={color} size={sz} />;
         if (route.name === 'Settings') return <IconGear color={color} size={sz} />;
       },
       tabBarActiveTintColor: C.w,
@@ -905,7 +811,6 @@ function RootTabs() {
     })}>
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="History" component={HistoryScreen} />
-      <Tab.Screen name="Train" component={TrainScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
   );
@@ -916,7 +821,12 @@ export default function App() {
 
   useEffect(() => {
     AsyncStorage.getItem('@server_url').then(url => { 
-      if (url && TFLiteModule) TFLiteModule.setServerBaseUrl(url); 
+      const activeUrl = url !== null ? url : DEFAULT_SERVER_URL;
+      if (TFLiteModule) TFLiteModule.setServerBaseUrl(activeUrl); 
+    });
+    AsyncStorage.getItem('@training_enabled').then(val => {
+      const enabled = val !== 'false';
+      if (TFLiteModule) TFLiteModule.setTrainingEnabled(enabled);
     });
   }, []);
 
