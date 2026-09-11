@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "HelloWorld",
-    "slug": "expo-template-blank",
+    "name": "AltScore",
+    "slug": "altscore",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.expotemplateblank"
+      "bundleIdentifier": "com.altscore.mobile"
     },
     "android": {
       "adaptiveIcon": {
@@ -17,7 +17,7 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "package": "com.anonymous.expotemplateblank"
+      "package": "com.altscore.mobile"
     },
     "web": {
       "favicon": "./assets/favicon.png"

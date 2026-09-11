@@ -1,4 +1,4 @@
-package com.anonymous.expotemplateblank
+package com.altscore.mobile
 
 import android.app.usage.UsageStatsManager
 import android.content.Context

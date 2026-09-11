@@ -1,4 +1,4 @@
-package com.anonymous.expotemplateblank
+package com.altscore.mobile
 
 import android.content.Context
 import android.util.Base64
